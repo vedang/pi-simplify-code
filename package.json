@@ -4,10 +4,20 @@
   "description": "Auto-trigger code simplification prompts after code edits in pi.",
   "type": "module",
   "main": "./dist/index.js",
-  "keywords": ["pi-package", "pi", "extension", "prompt", "refactor"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "extension",
+    "prompt",
+    "refactor"
+  ],
   "pi": {
-    "extensions": ["./src/index.ts"],
-    "prompts": ["./prompts"]
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

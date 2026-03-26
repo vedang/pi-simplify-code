@@ -18,7 +18,7 @@ function trimQuotes(value: string): string {
 }
 
 function normalizePath(path: string): string {
-  return trimQuotes(path.trim());
+  return trimQuotes(path);
 }
 
 function isMarkdownPath(path: string): boolean {
@@ -28,20 +28,13 @@ function isMarkdownPath(path: string): boolean {
 }
 
 export function shouldAutoTriggerSimplify(paths: Iterable<string>): boolean {
-  let hasAny = false;
-  let hasNonMarkdown = false;
-
   for (const rawPath of paths) {
     const normalized = normalizePath(rawPath);
-    if (!normalized) continue;
-    hasAny = true;
-    if (!isMarkdownPath(normalized)) {
-      hasNonMarkdown = true;
-      break;
+    if (normalized && !isMarkdownPath(normalized)) {
+      return true; // [tag:simplify_code_skip_markdown_only]
     }
   }
-
-  return hasAny && hasNonMarkdown; // [tag:simplify_code_skip_markdown_only]
+  return false;
 }
 
 export function extractPathsFromPatch(patchText: string): string[] {
