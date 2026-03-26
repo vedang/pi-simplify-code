@@ -97,15 +97,18 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   const pendingPaths = new Set<string>();
 
   function formatPathsMessage(paths: Set<string>): string {
+    const instruction =
+      "/simplify-code First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done";
+
     if (paths.size === 0) {
-      return "/simplify-code";
+      return instruction;
     }
 
     const pathList = Array.from(paths)
       .map((p) => `  - ${p}`)
       .join("\n");
 
-    return `/simplify-code The following code paths have changed:\n${pathList}`;
+    return `${instruction}\n\nThe following code paths have changed:\n${pathList}`;
   }
 
   pi.on("input", async (event) => {
