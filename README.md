@@ -1,5 +1,9 @@
 # Simplify-Code Extension
 
+<p align="center">
+  <img src="images/banner.png" alt="pi-simplify-code hero banner" width="100%">
+</p>
+
 Automatically triggers code simplification after non-markdown code changes, using the `simplify-code` prompt template.
 
 ## Features
