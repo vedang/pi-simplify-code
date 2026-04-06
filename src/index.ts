@@ -3,13 +3,75 @@
  *
  * Tracks file changes and triggers the simplify-code prompt template
  * after non-markdown code changes.
+ *
+ * Configuration via /simplify-code yes|no|ask:
+ *   yes  - always auto-trigger (default)
+ *   no   - never auto-trigger
+ *   ask  - prompt user with YES/NO dialog before triggering
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { extname } from "node:path";
 import type {
   ExtensionAPI,
   ToolCallEvent,
 } from "@mariozechner/pi-coding-agent";
+
+// ── Configuration ────────────────────────────────────────────────
+// [tag:simplify_config_mode]
+
+type SimplifyMode = "yes" | "no" | "ask";
+
+interface SimplifyConfig {
+  mode?: SimplifyMode;
+}
+
+const VALID_MODES: ReadonlySet<string> = new Set(["yes", "no", "ask"]);
+const DEFAULT_MODE: SimplifyMode = "yes";
+
+function getConfigPath(): { dir: string; path: string } {
+  const dir = join(homedir(), ".pi", "agent");
+  return { dir, path: join(dir, "simplify-code.json") };
+}
+
+function loadConfig(): SimplifyConfig {
+  const { path } = getConfigPath();
+  if (!existsSync(path)) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null) {
+      return {};
+    }
+
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.mode === "string" && VALID_MODES.has(record.mode)) {
+      return { mode: record.mode as SimplifyMode };
+    }
+
+    return {};
+  } catch (error) {
+    console.error(
+      `[simplify-code] Failed to load config from ${getConfigPath().path}: ${String(error)}`,
+    );
+    return {};
+  }
+}
+
+function saveConfig(config: SimplifyConfig): string | null {
+  try {
+    const { dir, path } = getConfigPath();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path, JSON.stringify(config, null, 2));
+    return null;
+  } catch (error) {
+    return String(error);
+  }
+}
 
 const MARKDOWN_EXTENSIONS = new Set([".md", ".mdx", ".markdown"]);
 
@@ -89,6 +151,9 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   let lastInputSource: "interactive" | "rpc" | "extension" | undefined;
   const pendingPaths = new Set<string>();
 
+  const initialConfig = loadConfig();
+  let mode: SimplifyMode = initialConfig.mode ?? DEFAULT_MODE;
+
   function formatPathsMessage(paths: Set<string>): string {
     const instruction =
       "/simplify-code First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done";
@@ -104,9 +169,25 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     return `${instruction}\n\nThe following code paths have changed:\n${pathList}`;
   }
 
-  pi.on("input", async (event) => {
+  pi.on("input", async (event, ctx) => {
     lastInputText = event.text;
     lastInputSource = event.source;
+
+    // Handle config subcommands: /simplify-code yes|no|ask
+    const trimmed = event.text.trim().toLowerCase();
+    if (trimmed.startsWith("/simplify-code ")) {
+      const arg = trimmed.slice("/simplify-code ".length).trim();
+      if (VALID_MODES.has(arg)) {
+        mode = arg as SimplifyMode;
+        const saveError = saveConfig({ mode });
+        if (saveError) {
+          ctx.ui.notify(`Failed to save config: ${saveError}`, "warning");
+        } else {
+          ctx.ui.notify(`Simplify-code mode set to: ${mode}`, "info");
+        }
+        return { action: "handled" };
+      }
+    }
   });
 
   pi.on("tool_call", async (event) => {
@@ -126,10 +207,33 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    // Check mode — "no" means never auto-trigger
+    if (mode === "no") {
+      pendingPaths.clear();
+      return;
+    }
+
     // Only trigger if non-markdown files were changed
     if (!shouldAutoTriggerSimplify(pendingPaths)) {
       pendingPaths.clear();
       return;
+    }
+
+    // In "ask" mode, prompt the user before triggering
+    if (mode === "ask") {
+      // In non-interactive modes (print/JSON), confirm() returns false,
+      // so fall through to auto-trigger to avoid silently skipping.
+      if (ctx.hasUI) {
+        const pathList = Array.from(pendingPaths)
+          .map((p) => `  - ${p}`)
+          .join("\n");
+        const question = `Code files have changed:\n${pathList}\n\nShould I run the simplify-code pass?`;
+        const ok = await ctx.ui.confirm("Simplify-Code", question);
+        if (!ok) {
+          pendingPaths.clear();
+          return;
+        }
+      }
     }
 
     // Send the follow-up message with changed paths
