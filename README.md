@@ -54,6 +54,18 @@ Manually trigger code simplification with optional context:
 
 The context is appended to the prompt instructions and provides additional guidance to the LLM.
 
+### `/simplify-code yes|no|ask`
+
+Control auto-trigger behavior:
+
+| Command | Behavior |
+|---------|----------|
+| `/simplify-code yes` | Always auto-trigger after code changes (default) |
+| `/simplify-code no` | Never auto-trigger |
+| `/simplify-code ask` | Show a YES/NO dialog before triggering |
+
+The setting persists across sessions in `~/.pi/agent/simplify-code.json`.
+
 ## What It Does
 
 The prompt template refines code to improve:
@@ -77,8 +89,17 @@ The extension automatically triggers after `agent_end` events when:
 1. At least one file was modified
 2. At least one non-markdown file was modified (`.md`, `.mdx`, `.markdown` are skipped)
 3. The trigger didn't come from the extension itself (prevents loops)
+4. The mode is not set to `no` (see [Configuration](#configuration))
+
+When the mode is set to `ask`, a confirmation dialog appears listing the changed files with YES/NO buttons.
 
 ## Configuration
+
+### Auto-Trigger Mode
+
+Use `/simplify-code yes|no|ask` to control auto-trigger behavior (see [Commands](#commands)).
+
+### Prompt Customization
 
 Customize simplification behavior by editing `prompts/simplify-code.md`:
 - Adjust refinement priorities
@@ -109,5 +130,6 @@ This separation of concerns allows:
 ## Notes
 
 - Skips markdown-only changes ([ref: simplify_code_skip_markdown_only])
-- The `/simplify-code` command is a prompt template, not an extension command
+- The `/simplify-code` command is a prompt template; `/simplify-code yes|no|ask` are intercepted by the extension
+- Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json`
 - Changes are committed after simplification by the LLM
