@@ -12,8 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { extname } from "node:path";
+import { extname, join } from "node:path";
 import type {
   ExtensionAPI,
   ToolCallEvent,
@@ -37,13 +36,13 @@ function getConfigPath(): { dir: string; path: string } {
 }
 
 function loadConfig(): SimplifyConfig {
-  const { path } = getConfigPath();
-  if (!existsSync(path)) {
+  const { path: configPath } = getConfigPath();
+  if (!existsSync(configPath)) {
     return {};
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
     if (typeof parsed !== "object" || parsed === null) {
       return {};
     }
@@ -56,7 +55,7 @@ function loadConfig(): SimplifyConfig {
     return {};
   } catch (error) {
     console.error(
-      `[simplify-code] Failed to load config from ${getConfigPath().path}: ${String(error)}`,
+      `[simplify-code] Failed to load config from ${configPath}: ${String(error)}`,
     );
     return {};
   }
@@ -79,19 +78,15 @@ function trimQuotes(value: string): string {
   return value.trim().replace(/^['"]|['"]$/g, "");
 }
 
-function normalizePath(path: string): string {
-  return trimQuotes(path);
-}
-
 function isMarkdownPath(path: string): boolean {
-  const normalized = normalizePath(path);
-  if (!normalized) return false;
-  return MARKDOWN_EXTENSIONS.has(extname(normalized).toLowerCase());
+  const trimmed = trimQuotes(path);
+  if (!trimmed) return false;
+  return MARKDOWN_EXTENSIONS.has(extname(trimmed).toLowerCase());
 }
 
 export function shouldAutoTriggerSimplify(paths: Iterable<string>): boolean {
   for (const rawPath of paths) {
-    const normalized = normalizePath(rawPath);
+    const normalized = trimQuotes(rawPath);
     if (normalized && !isMarkdownPath(normalized)) {
       return true; // [tag:simplify_code_skip_markdown_only]
     }
@@ -99,21 +94,16 @@ export function shouldAutoTriggerSimplify(paths: Iterable<string>): boolean {
   return false;
 }
 
+const PATCH_LINE_RE =
+  /^\*{3}\s(?:Add File|Update File|Delete File|Move to):\s(.+)$/;
+
 export function extractPathsFromPatch(patchText: string): string[] {
   const paths: string[] = [];
-  const lines = patchText.split(/\r?\n/);
 
-  for (const line of lines) {
-    const match = line.match(
-      /^\*{3}\s(?:Add File|Update File|Delete File):\s(.+)$/,
-    );
+  for (const line of patchText.split(/\r?\n/)) {
+    const match = line.match(PATCH_LINE_RE);
     if (match) {
       paths.push(trimQuotes(match[1]));
-      continue;
-    }
-    const moveMatch = line.match(/^\*{3}\sMove to:\s(.+)$/);
-    if (moveMatch) {
-      paths.push(trimQuotes(moveMatch[1]));
     }
   }
 
