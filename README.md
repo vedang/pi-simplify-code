@@ -4,14 +4,15 @@
   <img src="images/banner.png" alt="pi-simplify-code hero banner" width="100%">
 </p>
 
-Automatically triggers code simplification after non-markdown code changes, using the `simplify-code` prompt template.
+Auto-simplifies after non-markdown code changes by tracking changed files, sending a short follow-up message, and leaning on smart models to review and clean up touched code.
 
 ## Features
 
-- **Auto-Trigger**: Automatically runs after non-markdown code changes
-- **Project Standards**: Applies patterns from your `AGENTS.md` (ES modules, type annotations, etc.)
-- **Smart Detection**: Skips if only markdown files were changed
-- **Manual Trigger**: Use `/simplify-code` command anytime
+- **Agent-Native Auto-Trigger**: Sends a lightweight follow-up instead of stuffing a long prompt into extension-generated messages
+- **Changed-Path Context**: Tells agent exactly which files changed
+- **Project Standards**: Lets agent pick up repo conventions from `AGENTS.md` and surrounding code
+- **Smart Detection**: Skips markdown-only changes
+- **Manual Trigger**: Use `/simplify-code` yourself anytime
 
 ## How It Works
 
@@ -19,40 +20,53 @@ Automatically triggers code simplification after non-markdown code changes, usin
 
 The extension tracks file changes during an agent session:
 
-1. **Path Tracking**: Every time `write`, `edit`, or `apply_patch` tools are called, the extension records the modified file paths
+1. **Path Tracking**: Every time `write`, `edit`, or `apply_patch` tools are called, the extension records modified file paths.
 2. **Auto-Trigger Check**: At `agent_end`, the extension checks:
-   - Whether any files were modified
-   - Whether any non-markdown files were modified (`.md`, `.mdx`, `.markdown` are skipped)
-   - Whether the trigger came from the extension itself (to avoid loops)
-3. **Follow-up Message**: If conditions are met, sends a follow-up message like:
+   - whether any files were modified
+   - whether any non-markdown files were modified (`.md`, `.mdx`, `.markdown` are skipped)
+   - whether trigger came from extension itself (to avoid loops)
+3. **Follow-up Message**: If checks pass, extension sends a follow-up like:
    ```
-   /simplify-code The following code paths have changed:
+   /simplify-code First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done
+
+   The following code paths have changed:
      - src/api/client.ts
      - src/utils/helpers.ts
      - tests/example.test.ts
    ```
 
-### Prompt Template
+### Why This Works
 
-The simplification behavior is defined in `prompts/simplify-code.md`. This prompt template:
+This is core idea behind extension:
 
-- Contains the refinement instructions for the LLM
-- Can be invoked manually with `/simplify-code [context]`
-- Applies project-specific best practices from `AGENTS.md`
+- Extension-generated follow-up is **not** expanded into `prompts/simplify-code.md`.
+- Instead, extension gives model minimal but high-signal context: “simplify” + changed paths.
+- Frontier models are usually smart enough to infer they should inspect touched code, preserve behavior, and clean it up.
+- That model inference is whole point of extension. It leans into agent judgment instead of micromanaging simplification with a giant prompt every time.
+
+## Prompt Template and Manual Use
+
+`prompts/simplify-code.md` still matters, but in different path:
+
+- Manual `/simplify-code [context]` can use prompt-template guidance.
+- Auto-triggered follow-up from extension does **not** depend on that prompt being expanded.
+- Editing `prompts/simplify-code.md` mainly affects manual use and any environment where `/simplify-code` is expanded from normal user input.
 
 ## Commands
 
 ### `/simplify-code [context]`
 
-Manually trigger code simplification with optional context:
+Manually trigger simplification with optional context:
 
 ```bash
 /simplify-code
-/simplify-code Focus on the auth module
+/simplify-code Focus on auth module
 /simplify-code The following files need review: src/auth.ts src/session.ts
 ```
 
-The context is appended to the prompt instructions and provides additional guidance to the LLM.
+Use this when you want to explicitly ask for a simplify pass yourself.
+If your setup expands slash prompts for normal user input, `prompts/simplify-code.md` provides that guidance.
+This is separate from extension auto-trigger behavior.
 
 ### `/simplify-code yes|no|ask`
 
@@ -64,34 +78,33 @@ Control auto-trigger behavior:
 | `/simplify-code no` | Never auto-trigger |
 | `/simplify-code ask` | Show a YES/NO dialog before triggering |
 
-The setting persists across sessions in `~/.pi/agent/simplify-code.json`.
+Setting persists across sessions in `~/.pi/agent/simplify-code.json`.
 
-## What It Does
+## What Simplify Pass Usually Improves
 
-The prompt template refines code to improve:
-- **Clarity**: Reduces unnecessary complexity and nesting
-- **Consistency**: Applies project-wide coding standards
-- **Maintainability**: Improves variable/function names and structure
-- **Balance**: Avoids over-simplification that harms readability
+Whether triggered manually or inferred from extension follow-up, simplify pass usually aims to improve:
 
-### Specific Rules
-
-- Preserves exact functionality (never changes behavior)
-- Prefers `function` keyword over arrow functions
-- Uses explicit return type annotations
-- Avoids nested ternary operators (use switch/if-else instead)
-- Removes redundant comments for obvious code
-- Chooses clarity over brevity
+- **Clarity**: Reduce unnecessary complexity and nesting
+- **Consistency**: Align with project-wide coding patterns
+- **Maintainability**: Improve naming, structure, and readability
+- **Balance**: Avoid “shorter but worse” rewrites
 
 ## Auto-Trigger Behavior
 
-The extension automatically triggers after `agent_end` events when:
+Extension automatically sends simplify follow-up at `agent_end` when:
+
 1. At least one file was modified
 2. At least one non-markdown file was modified (`.md`, `.mdx`, `.markdown` are skipped)
-3. The trigger didn't come from the extension itself (prevents loops)
-4. The mode is not set to `no` (see [Configuration](#configuration))
+3. Trigger did not come from extension itself (prevents loops)
+4. Mode is not set to `no` (see [Configuration](#configuration))
 
-When the mode is set to `ask`, a confirmation dialog appears listing the changed files with YES/NO buttons.
+Follow-up contains:
+
+- `/simplify-code`
+- instruction to commit current changes, then simplify
+- list of changed paths
+
+In `ask` mode, a confirmation dialog appears listing changed files with YES/NO buttons before sending follow-up.
 
 ## Configuration
 
@@ -101,35 +114,43 @@ Use `/simplify-code yes|no|ask` to control auto-trigger behavior (see [Commands]
 
 ### Prompt Customization
 
-Customize simplification behavior by editing `prompts/simplify-code.md`:
-- Adjust refinement priorities
-- Add project-specific rules
-- Modify the balance between simplicity and clarity
+Customize `prompts/simplify-code.md` if you want to shape **manual** `/simplify-code` guidance:
+
+- adjust refinement priorities
+- add project-specific rules
+- change balance between simplicity and clarity
+
+This file does **not** power extension auto-trigger by being expanded into follow-up message.
+Auto-trigger works because model understands follow-up request plus changed-path context.
 
 ## Architecture
 
+### Auto-Trigger Path
+
 ```
-Extension (pi-extensions/simplify-code/index.ts)
+Extension (src/index.ts)
   ↓
-  Tracks file changes via tool_call events
+Tracks file changes via tool_call events
   ↓
-  At agent_end, sends: /simplify-code [paths]
+At agent_end, sends short follow-up with simplify request + changed paths
+  ↓
+Model inspects touched code and decides how to simplify it
+```
+
+### Manual Path
+
+```
+User runs /simplify-code [context]
   ↓
 Prompt Template (prompts/simplify-code.md)
   ↓
-  Expanded and sent to LLM
-  ↓
-  LLM simplifies the changed code
+Model simplifies code using explicit prompt-template guidance
 ```
-
-This separation of concerns allows:
-- Extension: Handles state tracking and timing
-- Prompt: Defines simplification behavior
-- Users: Can invoke `/simplify-code` manually with custom context
 
 ## Notes
 
-- Skips markdown-only changes ([ref: simplify_code_skip_markdown_only])
-- The `/simplify-code` command is a prompt template; `/simplify-code yes|no|ask` are intercepted by the extension
+- Skips markdown-only changes ([ref:simplify_code_skip_markdown_only])
+- Auto-trigger works by leaning on model intelligence, not by expanding prompt template inside extension follow-up
+- `/simplify-code yes|no|ask` are extension control commands for auto-trigger mode
 - Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json`
-- Changes are committed after simplification by the LLM
+- Auto-trigger follow-up asks agent to commit current changes before simplify pass so review stays easy
