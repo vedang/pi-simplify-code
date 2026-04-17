@@ -70,7 +70,7 @@ This is separate from extension auto-trigger behavior.
 
 ### `/simplify-code yes|no|ask`
 
-Control auto-trigger behavior:
+Control auto-trigger behavior (global scope, legacy behavior):
 
 | Command | Behavior |
 |---------|----------|
@@ -78,16 +78,25 @@ Control auto-trigger behavior:
 | `/simplify-code no` | Never auto-trigger |
 | `/simplify-code ask` | Show a YES/NO dialog before triggering |
 
-Setting persists across sessions in `~/.pi/agent/simplify-code.json`.
+The setting persists globally in `~/.pi/agent/simplify-code.json`.
 
-## What Simplify Pass Usually Improves
+### `/simplify-code global yes|no|ask`
 
-Whether triggered manually or inferred from extension follow-up, simplify pass usually aims to improve:
+Explicitly set global mode. Writes to `~/.pi/agent/simplify-code.json`.
 
-- **Clarity**: Reduce unnecessary complexity and nesting
-- **Consistency**: Align with project-wide coding patterns
-- **Maintainability**: Improve naming, structure, and readability
-- **Balance**: Avoid “shorter but worse” rewrites
+### `/simplify-code project yes|no|ask`
+
+Explicitly set project-mode. Writes to `<cwd>/.pi/extensions/simplify-code.json` using the current session cwd.
+
+The project value overrides global mode for matching sessions.
+
+## What It Does
+
+ The prompt template refines code to improve:
+ - **Clarity**: Reduces unnecessary complexity and nesting
+ - **Consistency**: Applies project-wide coding standards
+ - **Maintainability**: Improves variable/function names and structure
+ - **Balance**: Avoids over-simplification that harms readability
 
 ## Auto-Trigger Behavior
 
@@ -110,7 +119,15 @@ In `ask` mode, a confirmation dialog appears listing changed files with YES/NO b
 
 ### Auto-Trigger Mode
 
-Use `/simplify-code yes|no|ask` to control auto-trigger behavior (see [Commands](#commands)).
+Mode resolution is:
+
+1. Default: `yes`
+2. Global config: `~/.pi/agent/simplify-code.json`
+3. Project config: `<cwd>/.pi/extensions/simplify-code.json`
+
+This uses the session's current cwd for the project config path and applies project config over global config.
+
+Use `/simplify-code global yes|no|ask` for global scope and `/simplify-code project yes|no|ask` for project scope.
 
 ### Prompt Customization
 
@@ -154,3 +171,5 @@ Model simplifies code using explicit prompt-template guidance
 - `/simplify-code yes|no|ask` are extension control commands for auto-trigger mode
 - Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json`
 - Auto-trigger follow-up asks agent to commit current changes before simplify pass so review stays easy
+- Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json` (global)
+- Project override is stored in `<cwd>/.pi/extensions/simplify-code.json`
