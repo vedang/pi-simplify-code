@@ -6,6 +6,16 @@
 
 Auto-simplifies after non-markdown code changes by tracking changed files, sending a short follow-up message, and leaning on smart models to review and clean up touched code.
 
+## Install
+
+```bash
+# Install globally
+pi install git:github.com/vedang/pi-simplify-code
+
+# Or install for just the current project
+pi install -l git:github.com/vedang/pi-simplify-code
+```
+
 ## Features
 
 - **Agent-Native Auto-Trigger**: Sends a lightweight follow-up instead of stuffing a long prompt into extension-generated messages
