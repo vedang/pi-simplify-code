@@ -49,6 +49,11 @@ function initGitRepo(cwd: string): void {
   writeFileSync(join(cwd, ".git", "info", "exclude"), ".pi/\n");
 }
 
+function initJjRepo(cwd: string): void {
+  execFileSync("jj", ["git", "init"], { cwd, stdio: "ignore" });
+  writeFileSync(join(cwd, ".git", "info", "exclude"), ".pi/\n");
+}
+
 function createExtensionHarness(): {
   emit: (
     eventName: string,
@@ -543,6 +548,32 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(sendUserMessage).toHaveBeenCalledWith(
       expect.stringContaining("src/from-bash.ts"),
+    );
+  });
+
+  it("includes jj-discovered changed files without edit/write tool calls", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initJjRepo(cwd);
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src", "from-jj.ts"),
+      "export const fromJj = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/from-jj.ts"),
     );
   });
 });
