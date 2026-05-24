@@ -255,7 +255,11 @@ function scheduleSimplifyAfterIdle(
     }
   };
 
-  setTimeout(tick, 0);
+  if (ctx.isIdle()) {
+    tick();
+  } else {
+    setTimeout(tick, 0);
+  }
 }
 
 function extractCandidatePathsFromToolCall(event: ToolCallEvent): string[] {
@@ -471,14 +475,9 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
 
     // In non-interactive modes, skip confirmation and continue in auto mode.
 
-    // Send the follow-up message with changed paths
+    // Schedule the follow-up message with changed paths after this run settles.
     const message = formatPathsMessage(changedPaths);
     clearRunState();
-
-    if (ctx.isIdle()) {
-      pi.sendUserMessage(message);
-    } else {
-      scheduleSimplifyAfterIdle(pi, ctx, message);
-    }
+    scheduleSimplifyAfterIdle(pi, ctx, message);
   });
 }
