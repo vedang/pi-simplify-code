@@ -250,7 +250,7 @@ function scheduleSimplifyAfterIdle(
       pi.sendUserMessage(message);
     } catch (error) {
       console.error(
-        `[simplify-code] Failed to send simplify request: ${String(error)}`,
+        `[simplify-code] Failed to send simplify request: ${String(error)}\n${message}`,
       );
     }
   };

@@ -26,6 +26,7 @@ const tempDirs: string[] = [];
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -317,6 +318,47 @@ describe("simplify-code auto-trigger", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("logs changed paths when sending a scheduled simplify request fails", async () => {
+    vi.useFakeTimers();
+
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+    sendUserMessage.mockImplementation(() => {
+      throw new Error("send failed");
+    });
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "src/unsent.ts", content: "const value = 1;\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to send simplify request"),
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("src/unsent.ts"),
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("send failed"),
+    );
   });
 
   it("does not treat failed edit/write results as changed files", async () => {
