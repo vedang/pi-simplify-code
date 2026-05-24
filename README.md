@@ -30,7 +30,7 @@ pi install -l git:github.com/vedang/pi-simplify-code
 
 The extension tracks file changes during an agent session:
 
-1. **Path Tracking**: The extension confirms successful `write`/`edit` results, collects all current dirty VCS paths when available, and still accepts legacy/custom `apply_patch` payloads if a provider emits them. [ref:legacy_apply_patch_compat] [ref:simplify_path_scope_all_dirty]
+1. **Path Tracking**: The extension confirms successful `write`/`edit` results, collects all current dirty VCS paths when available, silently falls back to tool-result tracking when VCS is unavailable, and still accepts legacy/custom `apply_patch` payloads if a provider emits them. [ref:legacy_apply_patch_compat] [ref:simplify_path_scope_all_dirty] [ref:simplify_missing_vcs_silent_fallback]
 2. **Auto-Trigger Check**: At `agent_end`, the extension checks:
    - whether any files were modified
    - whether any non-markdown files were modified (`.md`, `.mdx`, `.markdown` are skipped)
@@ -122,6 +122,8 @@ If a user message is already pending at `agent_end`, or appears before the sched
 
 Path scope uses all current dirty VCS code paths at `agent_end`, not only paths newly dirtied during the last agent run. This catches changes made through `bash`, external helpers, and already-dirty files that the simplify pass should consider before committing current work. Tradeoff: if you begin a run with unrelated dirty files, they can appear in the simplify path list too; start from a clean working tree when you need a run-scoped list. [tag:simplify_path_scope_all_dirty]
 
+When no `.jj`/`.git` metadata exists, or a VCS command is unavailable, auto-trigger silently falls back to confirmed tool-result paths. This keeps scratch directories and non-repo sessions quiet and usable; coverage is narrower because `bash`/external writes require VCS discovery. [tag:simplify_missing_vcs_silent_fallback]
+
 Follow-up contains:
 
 - `/simplify-code`
@@ -187,5 +189,6 @@ Model simplifies code using explicit prompt-template guidance
 - Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json`
 - Auto-trigger follow-up asks agent to commit current changes before simplify pass so review stays easy
 - Auto-trigger path scope includes all current dirty VCS code paths, not only newly dirtied paths ([ref:simplify_path_scope_all_dirty])
+- Missing or unavailable VCS silently falls back to confirmed tool-result paths ([ref:simplify_missing_vcs_silent_fallback])
 - Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json` (global)
 - Project override is stored in `<cwd>/.pi/extensions/simplify-code.json`
