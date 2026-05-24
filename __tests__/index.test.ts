@@ -216,6 +216,40 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage.mock.calls[0]).toHaveLength(1);
   });
 
+  it("defers simplify requests until a scheduled idle check", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd, { isIdle: () => true });
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "src/changed.ts", content: "const value = 1;\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/changed.ts"),
+    );
+    expect(sendUserMessage.mock.calls[0]).toHaveLength(1);
+  });
+
   it("does not treat failed edit/write results as changed files", async () => {
     const cwd = createConfiguredCwd();
     const ctx = createContext(cwd);
@@ -258,6 +292,8 @@ describe("simplify-code auto-trigger", () => {
   });
 
   it("includes VCS-discovered changed files without edit/write tool calls", async () => {
+    vi.useFakeTimers();
+
     const cwd = createConfiguredCwd();
     initGitRepo(cwd);
     mkdirSync(join(cwd, "src"), { recursive: true });
@@ -273,6 +309,7 @@ describe("simplify-code auto-trigger", () => {
       { type: "agent_end", messages: [] } satisfies AgentEndEvent,
       ctx,
     );
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(sendUserMessage).toHaveBeenCalledWith(

@@ -255,11 +255,7 @@ function scheduleSimplifyAfterIdle(
     }
   };
 
-  if (ctx.isIdle()) {
-    tick();
-  } else {
-    setTimeout(tick, 0);
-  }
+  setTimeout(tick, 0);
 }
 
 function extractCandidatePathsFromToolCall(event: ToolCallEvent): string[] {
