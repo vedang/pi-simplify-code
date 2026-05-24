@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import type {
   ExtensionAPI,
+  ExtensionContext,
   ToolCallEvent,
 } from "@mariozechner/pi-coding-agent";
 
@@ -212,6 +213,49 @@ function formatPathList(paths: Iterable<string>): string {
     .join("\n");
 }
 
+const SIMPLIFY_IDLE_RETRY_DELAY_MS = 50;
+const SIMPLIFY_IDLE_MAX_ATTEMPTS = 20;
+
+function scheduleSimplifyAfterIdle(
+  pi: Pick<ExtensionAPI, "sendUserMessage">,
+  ctx: ExtensionContext,
+  message: string,
+): void {
+  let attempts = 0;
+
+  const tick = (): void => {
+    if (ctx.hasPendingMessages()) {
+      console.error(
+        "[simplify-code] Skipping auto-trigger because a user message is pending.",
+      );
+      return;
+    }
+
+    if (!ctx.isIdle()) {
+      attempts += 1;
+      if (attempts >= SIMPLIFY_IDLE_MAX_ATTEMPTS) {
+        console.error(
+          "[simplify-code] Failed to auto-trigger because pi did not become idle.",
+        );
+        return;
+      }
+
+      setTimeout(tick, SIMPLIFY_IDLE_RETRY_DELAY_MS);
+      return;
+    }
+
+    try {
+      pi.sendUserMessage(message);
+    } catch (error) {
+      console.error(
+        `[simplify-code] Failed to send simplify request: ${String(error)}`,
+      );
+    }
+  };
+
+  setTimeout(tick, 0);
+}
+
 function recordPathsFromToolCall(
   event: ToolCallEvent,
   paths: Set<string>,
@@ -335,7 +379,7 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     if (ctx.isIdle()) {
       pi.sendUserMessage(message);
     } else {
-      pi.sendUserMessage(message, { deliverAs: "followUp" });
+      scheduleSimplifyAfterIdle(pi, ctx, message);
     }
   });
 }
