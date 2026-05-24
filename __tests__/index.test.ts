@@ -361,6 +361,33 @@ describe("simplify-code auto-trigger", () => {
     );
   });
 
+  it("does not treat tool calls as changed files before successful results", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "tool_call",
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "src/pending-write.ts", content: "const value = 1;\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it("does not treat failed edit/write results as changed files", async () => {
     const cwd = createConfiguredCwd();
     const ctx = createContext(cwd);

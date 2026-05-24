@@ -43,6 +43,10 @@ interface ParsedSimplifyModeCommand {
   mode: SimplifyMode;
 }
 
+interface ToolCallCandidate {
+  paths: string[];
+}
+
 const COMMAND_PREFIX = "/simplify-code";
 const VALID_MODES: ReadonlySet<string> = new Set(["yes", "no", "ask"]);
 const VALID_SCOPES: ReadonlySet<string> = new Set(["global", "project"]);
@@ -276,27 +280,27 @@ function extractCandidatePathsFromToolCall(event: ToolCallEvent): string[] {
 
 function recordPendingToolCall(
   event: ToolCallEvent,
-  pendingToolCalls: Map<string, string[]>,
+  pendingToolCalls: Map<string, ToolCallCandidate>,
 ): void {
   const paths = extractCandidatePathsFromToolCall(event);
   if (paths.length > 0) {
-    pendingToolCalls.set(event.toolCallId, paths);
+    pendingToolCalls.set(event.toolCallId, { paths });
   }
 }
 
 function promoteSuccessfulToolResult(
   event: ToolResultEvent,
-  pendingToolCalls: Map<string, string[]>,
+  pendingToolCalls: Map<string, ToolCallCandidate>,
   paths: Set<string>,
 ): void {
-  const candidatePaths = pendingToolCalls.get(event.toolCallId);
+  const candidate = pendingToolCalls.get(event.toolCallId);
   pendingToolCalls.delete(event.toolCallId);
 
-  if (!candidatePaths || event.isError) {
+  if (!candidate || event.isError) {
     return;
   }
 
-  for (const path of candidatePaths) {
+  for (const path of candidate.paths) {
     paths.add(path);
   }
 }
@@ -367,7 +371,7 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   let lastInputSource: "interactive" | "rpc" | "extension" | undefined;
   let mode: SimplifyMode = DEFAULT_MODE;
   const pendingPaths = new Set<string>();
-  const pendingToolCalls = new Map<string, string[]>();
+  const pendingToolCalls = new Map<string, ToolCallCandidate>();
 
   function refreshMode(cwd: string): void {
     mode = loadEffectiveMode(cwd);
