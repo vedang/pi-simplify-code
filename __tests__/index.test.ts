@@ -250,6 +250,39 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage.mock.calls[0]).toHaveLength(1);
   });
 
+  it("skips scheduled simplify requests when user messages become pending", async () => {
+    vi.useFakeTimers();
+
+    let hasPendingMessages = false;
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd, {
+      hasPendingMessages: () => hasPendingMessages,
+      isIdle: () => true,
+    });
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "src/changed.ts", content: "const value = 1;\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+
+    hasPendingMessages = true;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it("does not treat failed edit/write results as changed files", async () => {
     const cwd = createConfiguredCwd();
     const ctx = createContext(cwd);
