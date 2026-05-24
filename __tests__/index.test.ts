@@ -388,6 +388,57 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("promotes successful edit/write results as changed files", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "edit-1",
+        toolName: "edit",
+        input: {
+          path: "src/successful-edit.ts",
+          oldText: "before",
+          newText: "after",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: {
+          path: "src/successful-write.ts",
+          content: "const value = 1;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/successful-edit.ts"),
+    );
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/successful-write.ts"),
+    );
+  });
+
   it("does not treat failed edit/write results as changed files", async () => {
     const cwd = createConfiguredCwd();
     const ctx = createContext(cwd);
