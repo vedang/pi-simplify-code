@@ -51,6 +51,14 @@ const COMMAND_PREFIX = "/simplify-code";
 const VALID_MODES: ReadonlySet<string> = new Set(["yes", "no", "ask"]);
 const VALID_SCOPES: ReadonlySet<string> = new Set(["global", "project"]);
 const DEFAULT_MODE: SimplifyMode = "yes";
+const BUILT_IN_PATH_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "write",
+  "edit",
+]);
+// [tag:legacy_apply_patch_compat] `apply_patch` is not a current
+// pi-coding-agent built-in. Keep this only for legacy/custom tools that emit
+// patchText payloads.
+const CUSTOM_PATCH_TOOL_NAME = "apply_patch";
 
 export function getGlobalConfigPath(): { dir: string; path: string } {
   const dir = join(homedir(), ".pi", "agent");
@@ -262,20 +270,31 @@ function scheduleSimplifyAfterIdle(
   setTimeout(tick, 0);
 }
 
+function extractPathsFromBuiltInPathTool(event: ToolCallEvent): string[] {
+  if (!BUILT_IN_PATH_TOOL_NAMES.has(event.toolName)) {
+    return [];
+  }
+
+  const input = event.input as { path?: unknown };
+  return typeof input.path === "string" ? [input.path] : [];
+}
+
+function extractPathsFromCustomApplyPatchTool(event: ToolCallEvent): string[] {
+  if (event.toolName !== CUSTOM_PATCH_TOOL_NAME) {
+    return [];
+  }
+
+  const input = event.input as { patchText?: unknown };
+  return typeof input.patchText === "string"
+    ? extractPathsFromPatch(input.patchText)
+    : [];
+}
+
 function extractCandidatePathsFromToolCall(event: ToolCallEvent): string[] {
-  if (event.toolName === "write" || event.toolName === "edit") {
-    const input = event.input as { path?: string };
-    return typeof input.path === "string" ? [input.path] : [];
-  }
-
-  if (event.toolName === "apply_patch") {
-    const input = event.input as { patchText?: string };
-    return typeof input.patchText === "string"
-      ? extractPathsFromPatch(input.patchText)
-      : [];
-  }
-
-  return [];
+  return [
+    ...extractPathsFromBuiltInPathTool(event),
+    ...extractPathsFromCustomApplyPatchTool(event),
+  ];
 }
 
 function recordPendingToolCall(

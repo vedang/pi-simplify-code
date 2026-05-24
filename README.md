@@ -30,7 +30,7 @@ pi install -l git:github.com/vedang/pi-simplify-code
 
 The extension tracks file changes during an agent session:
 
-1. **Path Tracking**: Every time `write`, `edit`, or `apply_patch` tools are called, the extension records modified file paths.
+1. **Path Tracking**: The extension confirms successful `write`/`edit` results, collects dirty VCS paths when available, and still accepts legacy/custom `apply_patch` payloads if a provider emits them. [ref:legacy_apply_patch_compat]
 2. **Auto-Trigger Check**: At `agent_end`, the extension checks:
    - whether any files were modified
    - whether any non-markdown files were modified (`.md`, `.mdx`, `.markdown` are skipped)

@@ -439,6 +439,46 @@ describe("simplify-code auto-trigger", () => {
     );
   });
 
+  it("preserves custom apply_patch compatibility after successful results", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "patch-1",
+        toolName: "apply_patch",
+        input: {
+          patchText: [
+            "*** Begin Patch",
+            "*** Update File: src/custom-patch.ts",
+            "@@",
+            "-const value = 1;",
+            "+const value = 2;",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/custom-patch.ts"),
+    );
+  });
+
   it("does not treat failed edit/write results as changed files", async () => {
     const cwd = createConfiguredCwd();
     const ctx = createContext(cwd);
