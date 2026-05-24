@@ -24,6 +24,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ToolCallEvent,
+  ToolResultEvent,
 } from "@mariozechner/pi-coding-agent";
 
 // ── Configuration ────────────────────────────────────────────────
@@ -256,25 +257,46 @@ function scheduleSimplifyAfterIdle(
   setTimeout(tick, 0);
 }
 
-function recordPathsFromToolCall(
-  event: ToolCallEvent,
-  paths: Set<string>,
-): void {
+function extractCandidatePathsFromToolCall(event: ToolCallEvent): string[] {
   if (event.toolName === "write" || event.toolName === "edit") {
     const input = event.input as { path?: string };
-    if (typeof input.path === "string") {
-      paths.add(input.path);
-    }
-    return;
+    return typeof input.path === "string" ? [input.path] : [];
   }
 
   if (event.toolName === "apply_patch") {
     const input = event.input as { patchText?: string };
-    if (typeof input.patchText === "string") {
-      for (const path of extractPathsFromPatch(input.patchText)) {
-        paths.add(path);
-      }
-    }
+    return typeof input.patchText === "string"
+      ? extractPathsFromPatch(input.patchText)
+      : [];
+  }
+
+  return [];
+}
+
+function recordPendingToolCall(
+  event: ToolCallEvent,
+  pendingToolCalls: Map<string, string[]>,
+): void {
+  const paths = extractCandidatePathsFromToolCall(event);
+  if (paths.length > 0) {
+    pendingToolCalls.set(event.toolCallId, paths);
+  }
+}
+
+function promoteSuccessfulToolResult(
+  event: ToolResultEvent,
+  pendingToolCalls: Map<string, string[]>,
+  paths: Set<string>,
+): void {
+  const candidatePaths = pendingToolCalls.get(event.toolCallId);
+  pendingToolCalls.delete(event.toolCallId);
+
+  if (!candidatePaths || event.isError) {
+    return;
+  }
+
+  for (const path of candidatePaths) {
+    paths.add(path);
   }
 }
 
@@ -283,6 +305,7 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   let lastInputSource: "interactive" | "rpc" | "extension" | undefined;
   let mode: SimplifyMode = DEFAULT_MODE;
   const pendingPaths = new Set<string>();
+  const pendingToolCalls = new Map<string, string[]>();
 
   function refreshMode(cwd: string): void {
     mode = loadEffectiveMode(cwd);
@@ -328,8 +351,17 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     return { action: "handled" };
   });
 
+  function clearRunState(): void {
+    pendingPaths.clear();
+    pendingToolCalls.clear();
+  }
+
   pi.on("tool_call", async (event) => {
-    recordPathsFromToolCall(event, pendingPaths);
+    recordPendingToolCall(event, pendingToolCalls);
+  });
+
+  pi.on("tool_result", async (event) => {
+    promoteSuccessfulToolResult(event, pendingToolCalls, pendingPaths);
   });
 
   pi.on("agent_end", async (_event, ctx) => {
@@ -337,25 +369,25 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
 
     // Don't trigger if there are pending messages
     if (ctx.hasPendingMessages()) {
-      pendingPaths.clear();
+      clearRunState();
       return;
     }
 
     // Avoid triggering if this was triggered by the extension itself
     if (lastInputSource === "extension" && isSimplifyCommand(lastInputText)) {
-      pendingPaths.clear();
+      clearRunState();
       return;
     }
 
     // Check mode — "no" means never auto-trigger
     if (mode === "no") {
-      pendingPaths.clear();
+      clearRunState();
       return;
     }
 
     // Only trigger if non-markdown files were changed
     if (!shouldAutoTriggerSimplify(pendingPaths)) {
-      pendingPaths.clear();
+      clearRunState();
       return;
     }
 
@@ -365,7 +397,7 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
       const question = `Code files have changed:\n${pathList}\n\nShould I run the simplify-code pass?`;
       const ok = await ctx.ui.confirm("Simplify-Code", question);
       if (!ok) {
-        pendingPaths.clear();
+        clearRunState();
         return;
       }
     }
@@ -374,7 +406,7 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
 
     // Send the follow-up message with changed paths
     const message = formatPathsMessage(pendingPaths);
-    pendingPaths.clear();
+    clearRunState();
 
     if (ctx.isIdle()) {
       pi.sendUserMessage(message);

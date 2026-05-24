@@ -6,6 +6,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ToolCallEvent,
+  ToolResultEvent,
 } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import simplifyCodeExtension, {
@@ -90,6 +91,28 @@ function createContext(
   } as unknown as ExtensionContext;
 }
 
+async function emitToolCallWithResult(
+  emit: ReturnType<typeof createExtensionHarness>["emit"],
+  toolCall: ToolCallEvent,
+  ctx: ExtensionContext,
+  isError = false,
+): Promise<void> {
+  await emit("tool_call", toolCall, ctx);
+  await emit(
+    "tool_result",
+    {
+      type: "tool_result",
+      toolCallId: toolCall.toolCallId,
+      toolName: toolCall.toolName,
+      input: toolCall.input,
+      content: [],
+      isError,
+      details: undefined,
+    } as ToolResultEvent,
+    ctx,
+  );
+}
+
 describe("simplify-code config helpers", () => {
   it("stores project config under cwd .pi/extensions", () => {
     expect(getProjectConfigPath("/repo")).toEqual({
@@ -127,8 +150,8 @@ describe("simplify-code auto-trigger", () => {
     const ctx = createContext(cwd, { isIdle: () => false });
     const { emit, sendUserMessage } = createExtensionHarness();
 
-    await emit(
-      "tool_call",
+    await emitToolCallWithResult(
+      emit,
       {
         type: "tool_call",
         toolCallId: "write-1",
@@ -157,8 +180,8 @@ describe("simplify-code auto-trigger", () => {
     const ctx = createContext(cwd, { isIdle: () => isIdle });
     const { emit, sendUserMessage } = createExtensionHarness();
 
-    await emit(
-      "tool_call",
+    await emitToolCallWithResult(
+      emit,
       {
         type: "tool_call",
         toolCallId: "write-1",
@@ -185,5 +208,46 @@ describe("simplify-code auto-trigger", () => {
       expect.stringContaining("src/changed.ts"),
     );
     expect(sendUserMessage.mock.calls[0]).toHaveLength(1);
+  });
+
+  it("does not treat failed edit/write results as changed files", async () => {
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "edit-1",
+        toolName: "edit",
+        input: {
+          path: "src/failed-edit.ts",
+          oldText: "before",
+          newText: "after",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+      true,
+    );
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "src/failed-write.ts", content: "const value = 1;\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+      true,
+    );
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
   });
 });
