@@ -115,7 +115,10 @@ Extension automatically sends simplify follow-up at `agent_end` when:
 1. At least one file was modified
 2. At least one non-markdown file was modified (`.md`, `.mdx`, `.markdown` are skipped)
 3. Trigger did not come from extension itself (prevents loops)
-4. Mode is not set to `no` (see [Configuration](#configuration))
+4. No user message is pending ([tag:simplify_skip_pending_user_message])
+5. Mode is not set to `no` (see [Configuration](#configuration))
+
+If a user message is already pending at `agent_end`, or appears before the scheduled idle send, auto-trigger is skipped entirely instead of deferred. User intent wins; run `/simplify-code` manually afterward if you still want the pass. [ref:simplify_skip_pending_user_message]
 
 Follow-up contains:
 
