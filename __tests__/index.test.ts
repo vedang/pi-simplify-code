@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +41,11 @@ function createConfiguredCwd(): string {
   writeFileSync(configPath.path, JSON.stringify({ mode: "yes" }));
 
   return cwd;
+}
+
+function initGitRepo(cwd: string): void {
+  execFileSync("git", ["init"], { cwd, stdio: "ignore" });
+  writeFileSync(join(cwd, ".git", "info", "exclude"), ".pi/\n");
 }
 
 function createExtensionHarness(): {
@@ -249,5 +255,28 @@ describe("simplify-code auto-trigger", () => {
     );
 
     expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("includes VCS-discovered changed files without edit/write tool calls", async () => {
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src", "from-bash.ts"),
+      "export const fromBash = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/from-bash.ts"),
+    );
   });
 });

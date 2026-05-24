@@ -17,6 +17,7 @@
  * defaults -> global (~/.pi/agent) -> project (<cwd>/.pi/extensions)
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, extname, join } from "node:path";
@@ -300,6 +301,67 @@ function promoteSuccessfulToolResult(
   }
 }
 
+function normalizeVcsPath(path: string): string | null {
+  const normalized = trimQuotes(path).replace(/\\/g, "/").replace(/^\.\//, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function parseNameOnlyOutput(output: string): string[] {
+  return output
+    .split(/\r?\n/)
+    .map(normalizeVcsPath)
+    .filter((path): path is string => path !== null);
+}
+
+function runVcsNameOnlyCommand(
+  cwd: string,
+  command: string,
+  args: string[],
+): string[] {
+  try {
+    return parseNameOnlyOutput(
+      execFileSync(command, args, {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function collectVcsChangedPaths(cwd: string): Set<string> {
+  const paths = new Set<string>();
+  const addPaths = (newPaths: Iterable<string>): void => {
+    for (const path of newPaths) {
+      paths.add(path);
+    }
+  };
+
+  if (existsSync(join(cwd, ".jj"))) {
+    addPaths(runVcsNameOnlyCommand(cwd, "jj", ["diff", "--name-only"]));
+    return paths;
+  }
+
+  if (!existsSync(join(cwd, ".git"))) {
+    return paths;
+  }
+
+  addPaths(
+    runVcsNameOnlyCommand(cwd, "git", ["diff", "--name-only", "HEAD", "--"]),
+  );
+  addPaths(
+    runVcsNameOnlyCommand(cwd, "git", [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+    ]),
+  );
+
+  return paths;
+}
+
 export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   let lastInputText: string | undefined;
   let lastInputSource: "interactive" | "rpc" | "extension" | undefined;
@@ -385,15 +447,20 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    const changedPaths = new Set([
+      ...pendingPaths,
+      ...collectVcsChangedPaths(ctx.cwd),
+    ]);
+
     // Only trigger if non-markdown files were changed
-    if (!shouldAutoTriggerSimplify(pendingPaths)) {
+    if (!shouldAutoTriggerSimplify(changedPaths)) {
       clearRunState();
       return;
     }
 
     // In "ask" mode, prompt the user before triggering
     if (mode === "ask" && ctx.hasUI) {
-      const pathList = formatPathList(pendingPaths);
+      const pathList = formatPathList(changedPaths);
       const question = `Code files have changed:\n${pathList}\n\nShould I run the simplify-code pass?`;
       const ok = await ctx.ui.confirm("Simplify-Code", question);
       if (!ok) {
@@ -405,7 +472,7 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     // In non-interactive modes, skip confirmation and continue in auto mode.
 
     // Send the follow-up message with changed paths
-    const message = formatPathsMessage(pendingPaths);
+    const message = formatPathsMessage(changedPaths);
     clearRunState();
 
     if (ctx.isIdle()) {
