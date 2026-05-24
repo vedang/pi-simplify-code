@@ -74,7 +74,9 @@ function createExtensionHarness(): {
 
 function createContext(
   cwd: string,
-  overrides: Partial<Pick<ExtensionContext, "hasPendingMessages" | "isIdle">> = {},
+  overrides: Partial<
+    Pick<ExtensionContext, "hasPendingMessages" | "isIdle">
+  > = {},
 ): ExtensionContext {
   return {
     cwd,
@@ -135,11 +137,53 @@ describe("simplify-code auto-trigger", () => {
       } satisfies ToolCallEvent,
       ctx,
     );
-    await emit("agent_end", { type: "agent_end", messages: [] } satisfies AgentEndEvent, ctx);
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
 
     expect(sendUserMessage).not.toHaveBeenCalled();
     expect(sendUserMessage).not.toHaveBeenCalledWith(expect.any(String), {
       deliverAs: "followUp",
     });
+  });
+
+  it("sends a direct simplify request after non-idle agent_end becomes idle", async () => {
+    vi.useFakeTimers();
+
+    let isIdle = false;
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd, { isIdle: () => isIdle });
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "tool_call",
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "src/changed.ts", content: "const value = 1;\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(sendUserMessage).not.toHaveBeenCalled();
+
+    isIdle = true;
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/changed.ts"),
+    );
+    expect(sendUserMessage.mock.calls[0]).toHaveLength(1);
   });
 });
