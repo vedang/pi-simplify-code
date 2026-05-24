@@ -324,16 +324,49 @@ function promoteSuccessfulToolResult(
   }
 }
 
-function normalizeVcsPath(path: string): string | null {
-  const normalized = trimQuotes(path).replace(/\\/g, "/").replace(/^\.\//, "");
+function normalizeChangedPath(path: string, cwd: string): string | null {
+  let normalized = trimQuotes(path).replace(/\\/g, "/");
+  if (!normalized) {
+    return null;
+  }
+
+  const normalizedCwd = trimQuotes(cwd).replace(/\\/g, "/").replace(/\/+$/, "");
+  if (normalizedCwd && normalized.startsWith(`${normalizedCwd}/`)) {
+    normalized = normalized.slice(normalizedCwd.length + 1);
+  }
+
+  normalized = normalized.replace(/^(?:\.\/)+/, "");
   return normalized.length > 0 ? normalized : null;
 }
 
-function parseNameOnlyOutput(output: string): string[] {
-  return output
-    .split(/\r?\n/)
-    .map(normalizeVcsPath)
-    .filter((path): path is string => path !== null);
+function normalizeChangedPaths(
+  cwd: string,
+  paths: Iterable<string>,
+): Set<string> {
+  const normalizedPaths = new Set<string>();
+
+  for (const path of paths) {
+    const normalized = normalizeChangedPath(path, cwd);
+    if (normalized !== null) {
+      normalizedPaths.add(normalized);
+    }
+  }
+
+  return normalizedPaths;
+}
+
+function mergeChangedPaths(
+  cwd: string,
+  ...pathGroups: Iterable<string>[]
+): Set<string> {
+  return normalizeChangedPaths(
+    cwd,
+    pathGroups.flatMap((paths) => Array.from(paths)),
+  );
+}
+
+function parseNameOnlyOutput(output: string, cwd: string): string[] {
+  return Array.from(normalizeChangedPaths(cwd, output.split(/\r?\n/)));
 }
 
 function runVcsNameOnlyCommand(
@@ -348,6 +381,7 @@ function runVcsNameOnlyCommand(
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }),
+      cwd,
     );
   } catch {
     return [];
@@ -470,10 +504,11 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    const changedPaths = new Set([
-      ...pendingPaths,
-      ...collectVcsChangedPaths(ctx.cwd),
-    ]);
+    const changedPaths = mergeChangedPaths(
+      ctx.cwd,
+      pendingPaths,
+      collectVcsChangedPaths(ctx.cwd),
+    );
 
     // Only trigger if non-markdown files were changed
     if (!shouldAutoTriggerSimplify(changedPaths)) {

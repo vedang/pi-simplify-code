@@ -576,4 +576,75 @@ describe("simplify-code auto-trigger", () => {
       expect.stringContaining("src/from-jj.ts"),
     );
   });
+
+  it("normalizes and dedupes merged tool and VCS changed paths", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src", "normalized.ts"),
+      "export const normalized = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: {
+          path: "./src\\normalized.ts",
+          content: "export const normalized = true;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const message = sendUserMessage.mock.calls[0][0] as string;
+    expect(message).not.toContain("./src\\normalized.ts");
+    expect(
+      message.split("\n").filter((line) => line.startsWith("  - ")),
+    ).toEqual(["  - src/normalized.ts"]);
+  });
+
+  it("skips auto-trigger when merged tool and VCS paths are markdown-only", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    mkdirSync(join(cwd, "docs"), { recursive: true });
+    writeFileSync(join(cwd, "docs", "notes.md"), "# Notes\n");
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "./docs/notes.md", content: "# Notes\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
 });
