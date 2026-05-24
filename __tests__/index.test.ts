@@ -283,6 +283,42 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("does not auto-trigger another simplify pass after extension simplify input", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "input",
+      {
+        type: "input",
+        source: "extension",
+        text: "/simplify-code First commit the current changes, then simplify.",
+      },
+      ctx,
+    );
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-1",
+        toolName: "write",
+        input: { path: "src/simplified.ts", content: "const value = 1;\n" },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it("does not treat failed edit/write results as changed files", async () => {
     const cwd = createConfiguredCwd();
     const ctx = createContext(cwd);
