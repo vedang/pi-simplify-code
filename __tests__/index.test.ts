@@ -155,35 +155,6 @@ describe("simplify-code config helpers", () => {
 });
 
 describe("simplify-code auto-trigger", () => {
-  it("does not queue non-idle agent_end simplify requests as followUp messages", async () => {
-    vi.useFakeTimers();
-
-    const cwd = createConfiguredCwd();
-    const ctx = createContext(cwd, { isIdle: () => false });
-    const { emit, sendUserMessage } = createExtensionHarness();
-
-    await emitToolCallWithResult(
-      emit,
-      {
-        type: "tool_call",
-        toolCallId: "write-1",
-        toolName: "write",
-        input: { path: "src/changed.ts", content: "const value = 1;\n" },
-      } satisfies ToolCallEvent,
-      ctx,
-    );
-    await emit(
-      "agent_end",
-      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
-      ctx,
-    );
-
-    expect(sendUserMessage).not.toHaveBeenCalled();
-    expect(sendUserMessage).not.toHaveBeenCalledWith(expect.any(String), {
-      deliverAs: "followUp",
-    });
-  });
-
   it("sends a direct simplify request after non-idle agent_end becomes idle", async () => {
     vi.useFakeTimers();
 
@@ -222,7 +193,7 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage.mock.calls[0]).toHaveLength(1);
   });
 
-  it("defers simplify requests until a scheduled idle check", async () => {
+  it("sends plain-language simplification guidance after a scheduled idle check", async () => {
     vi.useFakeTimers();
 
     const cwd = createConfiguredCwd();
@@ -250,9 +221,15 @@ describe("simplify-code auto-trigger", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
-    expect(sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("src/changed.ts"),
+    const message = sendUserMessage.mock.calls[0][0] as string;
+    expect(message).toContain(
+      "Your expertise lies in applying project-specific best practices",
     );
+    expect(message).toContain(
+      "First commit the current changes, then simplify.",
+    );
+    expect(message).toContain("src/changed.ts");
+    expect(message).not.toMatch(/^\/simplify-code\b/);
     expect(sendUserMessage.mock.calls[0]).toHaveLength(1);
   });
 
@@ -289,7 +266,7 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage).not.toHaveBeenCalled();
   });
 
-  it("does not auto-trigger another simplify pass after extension simplify input", async () => {
+  it("does not auto-trigger another simplify pass after extension follow-up input", async () => {
     vi.useFakeTimers();
 
     const cwd = createConfiguredCwd();
@@ -301,7 +278,7 @@ describe("simplify-code auto-trigger", () => {
       {
         type: "input",
         source: "extension",
-        text: "/simplify-code First commit the current changes, then simplify.",
+        text: "Your expertise lies in applying project-specific best practices to simplify and improve code without altering its behavior. Review the recently modified code and apply refinements to it. First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done.",
       },
       ctx,
     );

@@ -1,13 +1,12 @@
 {
   "name": "pi-simplify-code",
   "version": "0.1.0",
-  "description": "Auto-trigger code simplification prompts after code edits in pi.",
+  "description": "Auto-trigger code simplification follow-ups after code edits in pi.",
   "type": "module",
   "main": "./dist/index.js",
-  "keywords": ["pi-package", "pi", "extension", "prompt", "refactor"],
+  "keywords": ["pi-package", "pi", "extension", "refactor"],
   "pi": {
-    "extensions": ["./src/index.ts"],
-    "prompts": ["./prompts"]
+    "extensions": ["./src/index.ts"]
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -4,7 +4,7 @@
   <img src="images/banner.png" alt="pi-simplify-code hero banner" width="100%">
 </p>
 
-Auto-simplifies after non-markdown code changes by tracking changed files, sending a short follow-up message, and leaning on smart models to review and clean up touched code.
+Auto-simplifies after non-markdown code changes by tracking changed files, sending a short plain-language follow-up, and letting the agent apply project-specific cleanup judgment.
 
 ## Install
 
@@ -18,26 +18,23 @@ pi install -l git:github.com/vedang/pi-simplify-code
 
 ## Features
 
-- **Agent-Native Auto-Trigger**: Sends a lightweight follow-up instead of stuffing a long prompt into extension-generated messages
-- **Changed-Path Context**: Tells agent exactly which files changed
-- **Project Standards**: Lets agent pick up repo conventions from `AGENTS.md` and surrounding code
-- **Smart Detection**: Skips markdown-only changes
-- **Manual Trigger**: Use `/simplify-code` yourself anytime
+- **Plain-language follow-up**: asks the model to simplify recently modified code without invoking a slash command
+- **Changed-path context**: lists dirty code paths so the agent knows where to focus
+- **Project standards**: lets the agent infer conventions from `AGENTS.md`, config files, and nearby code
+- **Smart detection**: skips markdown-only changes
+- **Configurable mode**: supports automatic, disabled, or confirm-before-send behavior
 
 ## How It Works
 
-### Extension Behavior
+At `agent_end`, the extension:
 
-The extension tracks file changes during an agent session:
+1. Confirms successful `write`/`edit` tool results, discovers current dirty VCS paths when `.jj` or `.git` is available, and keeps legacy/custom `apply_patch` payload support for providers that emit them. [ref:legacy_apply_patch_compat] [ref:simplify_path_scope_all_dirty] [ref:simplify_missing_vcs_silent_fallback]
+2. Skips auto-trigger when no non-markdown files changed, when a user message is pending, when mode is `no`, or when the run was itself started by the extension.
+3. Optionally asks for confirmation in `ask` mode.
+4. Sends a follow-up like:
 
-1. **Path Tracking**: The extension confirms successful `write`/`edit` results, collects all current dirty VCS paths when available, silently falls back to tool-result tracking when VCS is unavailable, and still accepts legacy/custom `apply_patch` payloads if a provider emits them. [ref:legacy_apply_patch_compat] [ref:simplify_path_scope_all_dirty] [ref:simplify_missing_vcs_silent_fallback]
-2. **Auto-Trigger Check**: At `agent_end`, the extension checks:
-   - whether any files were modified
-   - whether any non-markdown files were modified (`.md`, `.mdx`, `.markdown` are skipped)
-   - whether trigger came from extension itself (to avoid loops)
-3. **Follow-up Message**: If checks pass, extension sends a follow-up like:
-   ```
-   /simplify-code First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done
+   ```text
+   Your expertise lies in applying project-specific best practices to simplify and improve code without altering its behavior. Review the recently modified code and apply refinements to it. First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done.
 
    The following code paths have changed:
      - src/api/client.ts
@@ -45,48 +42,21 @@ The extension tracks file changes during an agent session:
      - tests/example.test.ts
    ```
 
-### Why This Works
+The follow-up intentionally does **not** start with `/simplify-code`. Newer models were treating that phrase as a command to inspect. The extension now sends direct instructions instead.
 
-This is core idea behind extension:
+## Configuration Commands
 
-- Extension-generated follow-up is **not** expanded into `prompts/simplify-code.md`.
-- Instead, extension gives model minimal but high-signal context: “simplify” + changed paths.
-- Frontier models are usually smart enough to infer they should inspect touched code, preserve behavior, and clean it up.
-- That model inference is whole point of extension. It leans into agent judgment instead of micromanaging simplification with a giant prompt every time.
-
-## Prompt Template and Manual Use
-
-`prompts/simplify-code.md` still matters, but in different path:
-
-- Manual `/simplify-code [context]` can use prompt-template guidance.
-- Auto-triggered follow-up from extension does **not** depend on that prompt being expanded.
-- Editing `prompts/simplify-code.md` mainly affects manual use and any environment where `/simplify-code` is expanded from normal user input.
-
-## Commands
-
-### `/simplify-code [context]`
-
-Manually trigger simplification with optional context:
-
-```bash
-/simplify-code
-/simplify-code Focus on auth module
-/simplify-code The following files need review: src/auth.ts src/session.ts
-```
-
-Use this when you want to explicitly ask for a simplify pass yourself.
-If your setup expands slash prompts for normal user input, `prompts/simplify-code.md` provides that guidance.
-This is separate from extension auto-trigger behavior.
+`/simplify-code` remains only as the extension configuration command prefix.
 
 ### `/simplify-code yes|no|ask`
 
-Control auto-trigger behavior (global scope, legacy behavior):
+Control auto-trigger behavior with global scope:
 
 | Command | Behavior |
 |---------|----------|
 | `/simplify-code yes` | Always auto-trigger after code changes (default) |
 | `/simplify-code no` | Never auto-trigger |
-| `/simplify-code ask` | Show a YES/NO dialog before triggering |
+| `/simplify-code ask` | Show a YES/NO dialog before sending follow-up |
 
 The setting persists globally in `~/.pi/agent/simplify-code.json`.
 
@@ -96,45 +66,27 @@ Explicitly set global mode. Writes to `~/.pi/agent/simplify-code.json`.
 
 ### `/simplify-code project yes|no|ask`
 
-Explicitly set project-mode. Writes to `<cwd>/.pi/extensions/simplify-code.json` using the current session cwd.
+Explicitly set project mode. Writes to `<cwd>/.pi/extensions/simplify-code.json` using the current session cwd.
 
-The project value overrides global mode for matching sessions.
+Project mode overrides global mode for matching sessions.
 
-## What It Does
+## Auto-Trigger Rules
 
- The prompt template refines code to improve:
- - **Clarity**: Reduces unnecessary complexity and nesting
- - **Consistency**: Applies project-wide coding standards
- - **Maintainability**: Improves variable/function names and structure
- - **Balance**: Avoids over-simplification that harms readability
-
-## Auto-Trigger Behavior
-
-Extension automatically sends simplify follow-up at `agent_end` when:
+Extension automatically sends the simplify follow-up when:
 
 1. At least one file was modified
-2. At least one non-markdown file was modified (`.md`, `.mdx`, `.markdown` are skipped)
-3. Trigger did not come from extension itself (prevents loops)
+2. At least one modified file is non-markdown (`.md`, `.mdx`, `.markdown` are skipped) [ref:simplify_code_skip_markdown_only]
+3. Trigger did not come from the extension itself, preventing loops
 4. No user message is pending ([tag:simplify_skip_pending_user_message])
-5. Mode is not set to `no` (see [Configuration](#configuration))
+5. Effective mode is not `no`
 
-If a user message is already pending at `agent_end`, or appears before the scheduled idle send, auto-trigger is skipped entirely instead of deferred. User intent wins; run `/simplify-code` manually afterward if you still want the pass. [ref:simplify_skip_pending_user_message]
+If a user message is already pending at `agent_end`, or appears before the scheduled idle send, auto-trigger is skipped instead of deferred. User intent wins.
 
 Path scope uses all current dirty VCS code paths at `agent_end`, not only paths newly dirtied during the last agent run. This catches changes made through `bash`, external helpers, and already-dirty files that the simplify pass should consider before committing current work. Tradeoff: if you begin a run with unrelated dirty files, they can appear in the simplify path list too; start from a clean working tree when you need a run-scoped list. [tag:simplify_path_scope_all_dirty]
 
 When no `.jj`/`.git` metadata exists, or a VCS command is unavailable, auto-trigger silently falls back to confirmed tool-result paths. This keeps scratch directories and non-repo sessions quiet and usable; coverage is narrower because `bash`/external writes require VCS discovery. [tag:simplify_missing_vcs_silent_fallback]
 
-Follow-up contains:
-
-- `/simplify-code`
-- instruction to commit current changes, then simplify
-- list of changed paths
-
-In `ask` mode, a confirmation dialog appears listing changed files with YES/NO buttons before sending follow-up.
-
-## Configuration
-
-### Auto-Trigger Mode
+## Mode Resolution
 
 Mode resolution is:
 
@@ -142,53 +94,24 @@ Mode resolution is:
 2. Global config: `~/.pi/agent/simplify-code.json`
 3. Project config: `<cwd>/.pi/extensions/simplify-code.json`
 
-This uses the session's current cwd for the project config path and applies project config over global config.
-
-Use `/simplify-code global yes|no|ask` for global scope and `/simplify-code project yes|no|ask` for project scope.
-
-### Prompt Customization
-
-Customize `prompts/simplify-code.md` if you want to shape **manual** `/simplify-code` guidance:
-
-- adjust refinement priorities
-- add project-specific rules
-- change balance between simplicity and clarity
-
-This file does **not** power extension auto-trigger by being expanded into follow-up message.
-Auto-trigger works because model understands follow-up request plus changed-path context.
+Project config takes precedence over global config.
 
 ## Architecture
 
-### Auto-Trigger Path
-
-```
+```text
 Extension (src/index.ts)
   ↓
-Tracks file changes via tool_call events
+Tracks successful file-changing tool results and dirty VCS paths
   ↓
-At agent_end, sends short follow-up with simplify request + changed paths
+At agent_end, sends plain-language simplify request with changed paths
   ↓
-Model inspects touched code and decides how to simplify it
-```
-
-### Manual Path
-
-```
-User runs /simplify-code [context]
-  ↓
-Prompt Template (prompts/simplify-code.md)
-  ↓
-Model simplifies code using explicit prompt-template guidance
+Agent commits current changes, inspects touched code, and applies safe simplifications
 ```
 
 ## Notes
 
-- Skips markdown-only changes ([ref:simplify_code_skip_markdown_only])
-- Auto-trigger works by leaning on model intelligence, not by expanding prompt template inside extension follow-up
-- `/simplify-code yes|no|ask` are extension control commands for auto-trigger mode
-- Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json`
-- Auto-trigger follow-up asks agent to commit current changes before simplify pass so review stays easy
-- Auto-trigger path scope includes all current dirty VCS code paths, not only newly dirtied paths ([ref:simplify_path_scope_all_dirty])
-- Missing or unavailable VCS silently falls back to confirmed tool-result paths ([ref:simplify_missing_vcs_silent_fallback])
-- Auto-trigger mode is stored in `~/.pi/agent/simplify-code.json` (global)
-- Project override is stored in `<cwd>/.pi/extensions/simplify-code.json`
+- Auto-trigger works by leaning on model judgment, not by expanding a prompt template.
+- `/simplify-code yes|no|ask` commands only configure auto-trigger mode.
+- Auto-trigger follow-up asks the agent to commit current changes before simplifying, so review stays easy.
+- Auto-trigger path scope includes all current dirty VCS code paths, not only newly dirtied paths. [ref:simplify_path_scope_all_dirty]
+- Missing or unavailable VCS silently falls back to confirmed tool-result paths. [ref:simplify_missing_vcs_silent_fallback]

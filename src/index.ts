@@ -1,8 +1,8 @@
 /**
  * Simplify-Code Extension
  *
- * Tracks file changes and triggers the simplify-code prompt template
- * after non-markdown code changes.
+ * Tracks file changes and sends a plain-language simplify request after
+ * non-markdown code changes.
  *
  * Auto-trigger modes:
  * - `/simplify-code yes`     - always auto-trigger (default)
@@ -48,6 +48,8 @@ interface ToolCallCandidate {
 }
 
 const COMMAND_PREFIX = "/simplify-code";
+const FOLLOW_UP_INSTRUCTION =
+  "Your expertise lies in applying project-specific best practices to simplify and improve code without altering its behavior. Review the recently modified code and apply refinements to it. First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done.";
 const VALID_MODES: ReadonlySet<string> = new Set(["yes", "no", "ask"]);
 const VALID_SCOPES: ReadonlySet<string> = new Set(["global", "project"]);
 const DEFAULT_MODE: SimplifyMode = "yes";
@@ -217,8 +219,16 @@ export function extractPathsFromPatch(patchText: string): string[] {
   return paths;
 }
 
-function isSimplifyCommand(text: string | undefined): boolean {
-  return text?.trim().toLowerCase().startsWith(COMMAND_PREFIX) ?? false;
+function isExtensionSimplifyRequest(text: string | undefined): boolean {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  return (
+    trimmed.startsWith(FOLLOW_UP_INSTRUCTION) ||
+    trimmed.toLowerCase().startsWith(COMMAND_PREFIX)
+  );
 }
 
 function formatPathList(paths: Iterable<string>): string {
@@ -431,15 +441,12 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   }
 
   function formatPathsMessage(paths: Set<string>): string {
-    const instruction =
-      "/simplify-code First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done";
-
     if (paths.size === 0) {
-      return instruction;
+      return FOLLOW_UP_INSTRUCTION;
     }
 
     const pathList = formatPathList(paths);
-    return `${instruction}\n\nThe following code paths have changed:\n${pathList}`;
+    return `${FOLLOW_UP_INSTRUCTION}\n\nThe following code paths have changed:\n${pathList}`;
   }
 
   pi.on("input", async (event, ctx) => {
@@ -493,7 +500,10 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     }
 
     // Avoid triggering if this was triggered by the extension itself
-    if (lastInputSource === "extension" && isSimplifyCommand(lastInputText)) {
+    if (
+      lastInputSource === "extension" &&
+      isExtensionSimplifyRequest(lastInputText)
+    ) {
       clearRunState();
       return;
     }
