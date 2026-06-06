@@ -26,7 +26,7 @@ import type {
   ExtensionContext,
   ToolCallEvent,
   ToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 // ── Configuration ────────────────────────────────────────────────
 // [tag:simplify_config_mode]

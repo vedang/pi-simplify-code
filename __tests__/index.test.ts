@@ -8,7 +8,7 @@ import type {
   ExtensionContext,
   ToolCallEvent,
   ToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import simplifyCodeExtension, {
   getProjectConfigPath,
