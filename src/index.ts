@@ -48,6 +48,8 @@ interface ToolCallCandidate {
 }
 
 const COMMAND_PREFIX = "/simplify-code";
+const SIMPLIFY_COMMAND_USAGE =
+  "Usage: /simplify-code [global|project] <yes|no|ask>";
 const FOLLOW_UP_INSTRUCTION =
   "Your expertise lies in applying project-specific best practices to simplify and improve code without altering its behavior. Review the recently modified code and apply refinements to it. First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done.";
 const VALID_MODES: ReadonlySet<string> = new Set(["yes", "no", "ask"]);
@@ -142,19 +144,10 @@ function getConfigPathForScope(
   return scope === "global" ? getGlobalConfigPath() : getProjectConfigPath(cwd);
 }
 
-export function parseSimplifyModeCommand(
-  text: string,
+export function parseSimplifyModeArgs(
+  argsText: string,
 ): ParsedSimplifyModeCommand | null {
-  const trimmed = text.trim().toLowerCase();
-  if (!trimmed.startsWith(COMMAND_PREFIX)) {
-    return null;
-  }
-
-  const args = trimmed
-    .slice(COMMAND_PREFIX.length)
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+  const args = argsText.trim().toLowerCase().split(/\s+/).filter(Boolean);
 
   if (args.length === 1 && VALID_MODES.has(args[0])) {
     return {
@@ -175,6 +168,17 @@ export function parseSimplifyModeCommand(
   }
 
   return null;
+}
+
+export function parseSimplifyModeCommand(
+  text: string,
+): ParsedSimplifyModeCommand | null {
+  const trimmed = text.trim().toLowerCase();
+  if (trimmed !== COMMAND_PREFIX && !trimmed.startsWith(`${COMMAND_PREFIX} `)) {
+    return null;
+  }
+
+  return parseSimplifyModeArgs(trimmed.slice(COMMAND_PREFIX.length));
 }
 
 const MARKDOWN_EXTENSIONS = new Set([".md", ".mdx", ".markdown"]);
@@ -449,15 +453,10 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     return `${FOLLOW_UP_INSTRUCTION}\n\nThe following code paths have changed:\n${pathList}`;
   }
 
-  pi.on("input", async (event, ctx) => {
-    lastInputText = event.text;
-    lastInputSource = event.source;
-
-    const command = parseSimplifyModeCommand(event.text);
-    if (!command) {
-      return;
-    }
-
+  function handleSimplifyModeCommand(
+    command: ParsedSimplifyModeCommand,
+    ctx: ExtensionContext,
+  ): void {
     const configPath = getConfigPathForScope(command.scope, ctx.cwd);
     const saveError = saveConfigToPath(configPath.path, { mode: command.mode });
 
@@ -473,6 +472,31 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
         "info",
       );
     }
+  }
+
+  pi.registerCommand("simplify-code", {
+    description: "Configure simplify-code auto-trigger mode",
+    handler: async (args, ctx) => {
+      const command = parseSimplifyModeArgs(args);
+      if (!command) {
+        ctx.ui.notify(SIMPLIFY_COMMAND_USAGE, "error");
+        return;
+      }
+
+      handleSimplifyModeCommand(command, ctx);
+    },
+  });
+
+  pi.on("input", async (event, ctx) => {
+    lastInputText = event.text;
+    lastInputSource = event.source;
+
+    const command = parseSimplifyModeCommand(event.text);
+    if (!command) {
+      return;
+    }
+
+    handleSimplifyModeCommand(command, ctx);
 
     return { action: "handled" };
   });

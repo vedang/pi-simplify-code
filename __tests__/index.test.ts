@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -20,6 +26,11 @@ type RegisteredHandler = (
   event: unknown,
   ctx: ExtensionContext,
 ) => unknown | Promise<unknown>;
+
+type RegisteredCommand = {
+  description: string;
+  handler: (args: string, ctx: ExtensionContext) => unknown | Promise<unknown>;
+};
 
 const tempDirs: string[] = [];
 
@@ -60,15 +71,25 @@ function createExtensionHarness(): {
     event: unknown,
     ctx: ExtensionContext,
   ) => Promise<void>;
+  runCommand: (
+    commandName: string,
+    args: string,
+    ctx: ExtensionContext,
+  ) => Promise<void>;
+  commands: Map<string, RegisteredCommand>;
   sendUserMessage: ReturnType<typeof vi.fn>;
 } {
   const handlers = new Map<string, RegisteredHandler[]>();
+  const commands = new Map<string, RegisteredCommand>();
   const sendUserMessage = vi.fn();
   const pi = {
     on: vi.fn((eventName: string, handler: RegisteredHandler) => {
       const eventHandlers = handlers.get(eventName) ?? [];
       eventHandlers.push(handler);
       handlers.set(eventName, eventHandlers);
+    }),
+    registerCommand: vi.fn((name: string, command: RegisteredCommand) => {
+      commands.set(name, command);
     }),
     sendUserMessage,
   } as unknown as ExtensionAPI;
@@ -81,6 +102,14 @@ function createExtensionHarness(): {
         await handler(event, ctx);
       }
     },
+    async runCommand(commandName, args, ctx) {
+      const command = commands.get(commandName);
+      if (!command) {
+        throw new Error(`Command not registered: ${commandName}`);
+      }
+      await command.handler(args, ctx);
+    },
+    commands,
     sendUserMessage,
   };
 }
@@ -151,6 +180,46 @@ describe("simplify-code config helpers", () => {
       scope: "project",
       mode: "ask",
     });
+  });
+});
+
+describe("simplify-code command", () => {
+  it("registers a top-level command for autocomplete", () => {
+    const { commands } = createExtensionHarness();
+
+    expect(commands.get("simplify-code")?.description).toContain(
+      "Configure simplify-code auto-trigger mode",
+    );
+  });
+
+  it("reports usage as an error when run without args", async () => {
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { runCommand, sendUserMessage } = createExtensionHarness();
+
+    await runCommand("simplify-code", "", ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "Usage: /simplify-code [global|project] <yes|no|ask>",
+      "error",
+    );
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("runs project config management through the registered command", async () => {
+    const cwd = createConfiguredCwd();
+    const ctx = createContext(cwd);
+    const { runCommand } = createExtensionHarness();
+
+    await runCommand("simplify-code", "project ask", ctx);
+
+    expect(
+      JSON.parse(readFileSync(getProjectConfigPath(cwd).path, "utf-8")),
+    ).toEqual({ mode: "ask" });
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "Simplify-code project mode set to: ask. Effective mode for this cwd: ask",
+      "info",
+    );
   });
 });
 
