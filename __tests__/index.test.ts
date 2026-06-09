@@ -70,7 +70,7 @@ function createExtensionHarness(): {
     eventName: string,
     event: unknown,
     ctx: ExtensionContext,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   runCommand: (
     commandName: string,
     args: string,
@@ -98,9 +98,11 @@ function createExtensionHarness(): {
 
   return {
     async emit(eventName, event, ctx) {
+      let result: unknown;
       for (const handler of handlers.get(eventName) ?? []) {
-        await handler(event, ctx);
+        result = await handler(event, ctx);
       }
+      return result;
     },
     async runCommand(commandName, args, ctx) {
       const command = commands.get(commandName);
@@ -181,6 +183,10 @@ describe("simplify-code config helpers", () => {
       mode: "ask",
     });
   });
+
+  it("parses working-copy pass commands", () => {
+    expect(parseSimplifyModeCommand("/simplify-code wc")).toBe("wc");
+  });
 });
 
 describe("simplify-code command", () => {
@@ -200,7 +206,7 @@ describe("simplify-code command", () => {
     await runCommand("simplify-code", "", ctx);
 
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      "Usage: /simplify-code [global|project] <yes|no|ask>",
+      "Usage: /simplify-code wc | /simplify-code [global|project] <yes|no|ask>",
       "error",
     );
     expect(sendUserMessage).not.toHaveBeenCalled();
@@ -219,6 +225,66 @@ describe("simplify-code command", () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       "Simplify-code project mode set to: ask. Effective mode for this cwd: ask",
       "info",
+    );
+  });
+
+  it("runs a manual working-copy pass through the registered command even when auto mode is no", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    writeFileSync(
+      getProjectConfigPath(cwd).path,
+      JSON.stringify({ mode: "no" }),
+    );
+    initGitRepo(cwd);
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src", "manual.ts"),
+      "export const manual = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { runCommand, sendUserMessage } = createExtensionHarness();
+
+    await runCommand("simplify-code", "wc", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const message = sendUserMessage.mock.calls[0][0] as string;
+    expect(message).toContain(
+      "Your expertise lies in applying project-specific best practices",
+    );
+    expect(message).toContain("src/manual.ts");
+    expect(message).not.toMatch(/^\/simplify-code\b/);
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      "Usage: /simplify-code wc | /simplify-code [global|project] <yes|no|ask>",
+      "error",
+    );
+  });
+
+  it("runs a manual working-copy pass through slash input", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src", "manual-input.ts"),
+      "export const manualInput = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    const result = await emit(
+      "input",
+      { type: "input", source: "interactive", text: "/simplify-code wc" },
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(result).toEqual({ action: "handled" });
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("src/manual-input.ts"),
     );
   });
 });

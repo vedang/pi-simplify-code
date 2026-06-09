@@ -4,7 +4,7 @@
   <img src="images/banner.png" alt="pi-simplify-code hero banner" width="100%">
 </p>
 
-Auto-simplifies after non-markdown code changes by tracking changed files, sending a short plain-language follow-up, and letting the agent apply project-specific cleanup judgment.
+Auto-simplifies after non-markdown code changes by tracking changed files, sending a short plain-language follow-up, and letting the agent apply project-specific cleanup judgment. Also supports a manual working-copy pass through `/simplify-code wc`.
 
 ## Install
 
@@ -23,6 +23,7 @@ pi install -l git:github.com/vedang/pi-simplify-code
 - **Project standards**: lets the agent infer conventions from `AGENTS.md`, config files, and nearby code
 - **Smart detection**: skips markdown-only changes
 - **Configurable mode**: supports automatic, disabled, or confirm-before-send behavior
+- **Manual working-copy pass**: `/simplify-code wc` runs immediate simplify follow-up on current dirty paths regardless of auto mode
 
 ## How It Works
 
@@ -44,9 +45,18 @@ At `agent_end`, the extension:
 
 The follow-up intentionally does **not** start with `/simplify-code`. Newer models were treating that phrase as a command to inspect. The extension now sends direct instructions instead.
 
-## Configuration Commands
+## Commands
 
-`/simplify-code` remains only as the extension configuration command prefix.
+`/simplify-code` supports both config mode commands and a manual working-copy command.
+
+### `/simplify-code wc`
+
+Run a manual simplify pass on the current working copy immediately, regardless of effective auto mode (`yes|no|ask`), including when project mode is `no` or `ask`. This collects:
+
+- successful `write`/`edit`/`apply_patch` tool paths seen in this run
+- current dirty VCS paths from `.git`/`.jj`
+
+The path list is normalized/deduped and markdown-only paths are skipped for triggering (same filtering as auto mode).
 
 ### `/simplify-code yes|no|ask`
 
@@ -72,7 +82,7 @@ Project mode overrides global mode for matching sessions.
 
 ## Auto-Trigger Rules
 
-Extension automatically sends the simplify follow-up when:
+The extension sends this auto-trigger follow-up at `agent_end` when:
 
 1. At least one file was modified
 2. At least one modified file is non-markdown (`.md`, `.mdx`, `.markdown` are skipped) [ref:simplify_code_skip_markdown_only]
@@ -81,6 +91,8 @@ Extension automatically sends the simplify follow-up when:
 5. Effective mode is not `no`
 
 If a user message is already pending at `agent_end`, or appears before the scheduled idle send, auto-trigger is skipped instead of deferred. User intent wins.
+
+`/simplify-code wc` bypasses auto-mode and runs the same path-collection/follow-up pipeline without checking configured mode or confirm flow.
 
 Path scope uses all current dirty VCS code paths at `agent_end`, not only paths newly dirtied during the last agent run. This catches changes made through `bash`, external helpers, and already-dirty files that the simplify pass should consider before committing current work. Tradeoff: if you begin a run with unrelated dirty files, they can appear in the simplify path list too; start from a clean working tree when you need a run-scoped list. [tag:simplify_path_scope_all_dirty]
 
@@ -112,6 +124,7 @@ Agent commits current changes, inspects touched code, and applies safe simplific
 
 - Auto-trigger works by leaning on model judgment, not by expanding a prompt template.
 - `/simplify-code yes|no|ask` commands only configure auto-trigger mode.
+- `/simplify-code wc` runs a manual working-copy simplify pass and ignores auto-trigger mode.
 - Auto-trigger follow-up asks the agent to commit current changes before simplifying, so review stays easy.
 - Auto-trigger path scope includes all current dirty VCS code paths, not only newly dirtied paths. [ref:simplify_path_scope_all_dirty]
 - Missing or unavailable VCS silently falls back to confirmed tool-result paths. [ref:simplify_missing_vcs_silent_fallback]

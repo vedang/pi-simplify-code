@@ -8,6 +8,7 @@
  * - `/simplify-code yes`     - always auto-trigger (default)
  * - `/simplify-code no`      - never auto-trigger
  * - `/simplify-code ask`     - ask before triggering
+ * - `/simplify-code wc`      - run manual working-copy pass
  *
  * Scoped commands:
  * - `/simplify-code global yes|no|ask`  - write/interpret global config
@@ -43,13 +44,18 @@ interface ParsedSimplifyModeCommand {
   mode: SimplifyMode;
 }
 
+const WORKING_COPY_COMMAND = "wc" as const;
+type ParsedSimplifyCommand =
+  | ParsedSimplifyModeCommand
+  | typeof WORKING_COPY_COMMAND;
+
 interface ToolCallCandidate {
   paths: string[];
 }
 
 const COMMAND_PREFIX = "/simplify-code";
 const SIMPLIFY_COMMAND_USAGE =
-  "Usage: /simplify-code [global|project] <yes|no|ask>";
+  "Usage: /simplify-code wc | /simplify-code [global|project] <yes|no|ask>";
 const FOLLOW_UP_INSTRUCTION =
   "Your expertise lies in applying project-specific best practices to simplify and improve code without altering its behavior. Review the recently modified code and apply refinements to it. First commit the current changes, then simplify. This makes it easy to review the changes manually after you are done.";
 const VALID_MODES: ReadonlySet<string> = new Set(["yes", "no", "ask"]);
@@ -146,8 +152,12 @@ function getConfigPathForScope(
 
 export function parseSimplifyModeArgs(
   argsText: string,
-): ParsedSimplifyModeCommand | null {
+): ParsedSimplifyCommand | null {
   const args = argsText.trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+  if (args.length === 1 && args[0] === WORKING_COPY_COMMAND) {
+    return WORKING_COPY_COMMAND;
+  }
 
   if (args.length === 1 && VALID_MODES.has(args[0])) {
     return {
@@ -172,7 +182,7 @@ export function parseSimplifyModeArgs(
 
 export function parseSimplifyModeCommand(
   text: string,
-): ParsedSimplifyModeCommand | null {
+): ParsedSimplifyCommand | null {
   const trimmed = text.trim().toLowerCase();
   if (trimmed !== COMMAND_PREFIX && !trimmed.startsWith(`${COMMAND_PREFIX} `)) {
     return null;
@@ -444,6 +454,10 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     mode = loadEffectiveMode(cwd);
   }
 
+  function collectSimplifyCandidatePaths(cwd: string): Set<string> {
+    return mergeChangedPaths(cwd, pendingPaths, collectVcsChangedPaths(cwd));
+  }
+
   function formatPathsMessage(paths: Set<string>): string {
     if (paths.size === 0) {
       return FOLLOW_UP_INSTRUCTION;
@@ -451,6 +465,37 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
 
     const pathList = formatPathList(paths);
     return `${FOLLOW_UP_INSTRUCTION}\n\nThe following code paths have changed:\n${pathList}`;
+  }
+
+  async function maybeRunSimplifyPass(
+    ctx: ExtensionContext,
+    respectAutoMode: boolean,
+  ): Promise<void> {
+    const changedPaths = collectSimplifyCandidatePaths(ctx.cwd);
+
+    if (!shouldAutoTriggerSimplify(changedPaths)) {
+      clearRunState();
+      return;
+    }
+
+    if (respectAutoMode && mode === "no") {
+      clearRunState();
+      return;
+    }
+
+    if (respectAutoMode && mode === "ask" && ctx.hasUI) {
+      const pathList = formatPathList(changedPaths);
+      const question = `Code files have changed:\n${pathList}\n\nShould I run the simplify-code pass?`;
+      const ok = await ctx.ui.confirm("Simplify-Code", question);
+      if (!ok) {
+        clearRunState();
+        return;
+      }
+    }
+
+    const message = formatPathsMessage(changedPaths);
+    clearRunState();
+    scheduleSimplifyAfterIdle(pi, ctx, message);
   }
 
   function handleSimplifyModeCommand(
@@ -475,11 +520,17 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   }
 
   pi.registerCommand("simplify-code", {
-    description: "Configure simplify-code auto-trigger mode",
+    description:
+      "Configure simplify-code auto-trigger mode or run working-copy pass",
     handler: async (args, ctx) => {
       const command = parseSimplifyModeArgs(args);
       if (!command) {
         ctx.ui.notify(SIMPLIFY_COMMAND_USAGE, "error");
+        return;
+      }
+
+      if (command === WORKING_COPY_COMMAND) {
+        await maybeRunSimplifyPass(ctx, false);
         return;
       }
 
@@ -494,6 +545,11 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     const command = parseSimplifyModeCommand(event.text);
     if (!command) {
       return;
+    }
+
+    if (command === WORKING_COPY_COMMAND) {
+      await maybeRunSimplifyPass(ctx, false);
+      return { action: "handled" };
     }
 
     handleSimplifyModeCommand(command, ctx);
@@ -532,40 +588,6 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    // Check mode — "no" means never auto-trigger
-    if (mode === "no") {
-      clearRunState();
-      return;
-    }
-
-    const changedPaths = mergeChangedPaths(
-      ctx.cwd,
-      pendingPaths,
-      collectVcsChangedPaths(ctx.cwd),
-    );
-
-    // Only trigger if non-markdown files were changed
-    if (!shouldAutoTriggerSimplify(changedPaths)) {
-      clearRunState();
-      return;
-    }
-
-    // In "ask" mode, prompt the user before triggering
-    if (mode === "ask" && ctx.hasUI) {
-      const pathList = formatPathList(changedPaths);
-      const question = `Code files have changed:\n${pathList}\n\nShould I run the simplify-code pass?`;
-      const ok = await ctx.ui.confirm("Simplify-Code", question);
-      if (!ok) {
-        clearRunState();
-        return;
-      }
-    }
-
-    // In non-interactive modes, skip confirmation and continue in auto mode.
-
-    // Schedule the follow-up message with changed paths after this run settles.
-    const message = formatPathsMessage(changedPaths);
-    clearRunState();
-    scheduleSimplifyAfterIdle(pi, ctx, message);
+    await maybeRunSimplifyPass(ctx, true);
   });
 }
