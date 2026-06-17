@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "keywords": ["pi-package", "pi", "extension", "refactor"],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": ["./src/index.ts"],
+    "image": "https://raw.githubusercontent.com/vedang/pi-simplify-code/main/images/banner.png"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
