@@ -570,6 +570,8 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
     promoteSuccessfulToolResult(event, pendingToolCalls, pendingPaths);
   });
 
+  // Keep agent_end: this controller must schedule its follow-up before the
+  // extension follow-up queue settles; agent_settled would run too late.
   pi.on("agent_end", async (_event, ctx) => {
     refreshMode(ctx.cwd);
 
