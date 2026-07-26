@@ -65,6 +65,26 @@ function initJjRepo(cwd: string): void {
   writeFileSync(join(cwd, ".git", "info", "exclude"), ".pi/\n");
 }
 
+function commitGitPaths(cwd: string, paths: string[]): void {
+  execFileSync("git", ["add", "--force", "--", ...paths], {
+    cwd,
+    stdio: "ignore",
+  });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Test User",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "test baseline",
+    ],
+    { cwd, stdio: "ignore" },
+  );
+}
+
 function createExtensionHarness(): {
   emit: (
     eventName: string,
@@ -661,6 +681,322 @@ describe("simplify-code auto-trigger", () => {
     expect(sendUserMessage).toHaveBeenCalledWith(
       expect.stringContaining("src/from-bash.ts"),
     );
+  });
+
+  it("excludes gitignored tool paths from the changed-file list", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    writeFileSync(join(cwd, ".gitignore"), "generated/\n");
+    mkdirSync(join(cwd, "generated"), { recursive: true });
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "generated", "ignored.ts"),
+      "export const ignored = true;\n",
+    );
+    writeFileSync(
+      join(cwd, "src", "visible.ts"),
+      "export const visible = true;\n",
+    );
+    const outsideDir = mkdtempSync(
+      join(tmpdir(), "pi-simplify-code-outside-test-"),
+    );
+    tempDirs.push(outsideDir);
+    const outsidePath = join(outsideDir, "outside.ts");
+    writeFileSync(outsidePath, "export const outside = true;\n");
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-ignored",
+        toolName: "write",
+        input: {
+          path: "generated/ignored.ts",
+          content: "export const ignored = true;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-visible",
+        toolName: "write",
+        input: {
+          path: "src/visible.ts",
+          content: "export const visible = true;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-outside",
+        toolName: "write",
+        input: {
+          path: outsidePath,
+          content: "export const outside = true;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const message = sendUserMessage.mock.calls[0][0] as string;
+    expect(message).toContain("src/visible.ts");
+    expect(message).toContain(outsidePath);
+    expect(message).not.toContain("generated/ignored.ts");
+  });
+
+  it("does not trigger when all changed files are gitignored", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    writeFileSync(join(cwd, ".gitignore"), "generated/\n");
+    commitGitPaths(cwd, [".gitignore"]);
+    mkdirSync(join(cwd, "generated"), { recursive: true });
+    writeFileSync(
+      join(cwd, "generated", "ignored.ts"),
+      "export const ignored = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-ignored",
+        toolName: "write",
+        input: {
+          path: "generated/ignored.ts",
+          content: "export const ignored = true;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("excludes root-gitignored tool paths from a nested cwd", async () => {
+    vi.useFakeTimers();
+
+    const root = createConfiguredCwd();
+    initGitRepo(root);
+    writeFileSync(join(root, ".gitignore"), "packages/app/generated/\n");
+    const cwd = join(root, "packages", "app");
+    const configPath = getProjectConfigPath(cwd);
+    mkdirSync(configPath.dir, { recursive: true });
+    writeFileSync(configPath.path, JSON.stringify({ mode: "yes" }));
+    mkdirSync(join(cwd, "generated"), { recursive: true });
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "generated", "ignored.ts"),
+      "export const ignored = true;\n",
+    );
+    writeFileSync(
+      join(cwd, "src", "visible.ts"),
+      "export const visible = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-nested-ignored",
+        toolName: "write",
+        input: {
+          path: "generated/ignored.ts",
+          content: "export const ignored = true;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emitToolCallWithResult(
+      emit,
+      {
+        type: "tool_call",
+        toolCallId: "write-nested-visible",
+        toolName: "write",
+        input: {
+          path: "src/visible.ts",
+          content: "export const visible = true;\n",
+        },
+      } satisfies ToolCallEvent,
+      ctx,
+    );
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const message = sendUserMessage.mock.calls[0][0] as string;
+    expect(message).toContain("src/visible.ts");
+    expect(message).not.toContain("generated/ignored.ts");
+  });
+
+  it("discovers nested-cwd untracked Git paths with exact relative names", async () => {
+    vi.useFakeTimers();
+
+    const root = createConfiguredCwd();
+    initGitRepo(root);
+    writeFileSync(join(root, ".gitignore"), "/src/\n");
+    const cwd = join(root, "packages", "app");
+    const configPath = getProjectConfigPath(cwd);
+    mkdirSync(configPath.dir, { recursive: true });
+    writeFileSync(configPath.path, JSON.stringify({ mode: "yes" }));
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src", "untracked.ts"),
+      "export const untracked = true;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const message = sendUserMessage.mock.calls[0][0] as string;
+    expect(
+      message.split("\n").filter((line) => line.startsWith("  - ")),
+    ).toEqual(["  - src/untracked.ts"]);
+  });
+
+  it("excludes tracked files that match Git ignore rules", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    mkdirSync(join(cwd, "generated"), { recursive: true });
+    writeFileSync(join(cwd, ".gitignore"), "generated/tracked.ts\n");
+    writeFileSync(
+      join(cwd, "generated", "tracked.ts"),
+      "export const tracked = 1;\n",
+    );
+    commitGitPaths(cwd, [".gitignore", "generated/tracked.ts"]);
+    writeFileSync(
+      join(cwd, "generated", "tracked.ts"),
+      "export const tracked = 2;\n",
+    );
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("excludes paths from repository and configured global Git ignore sources", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    writeFileSync(
+      join(cwd, ".git", "info", "exclude"),
+      ".pi/\ninfo-ignored/\n",
+    );
+    const globalIgnorePath = join(cwd, ".git", "test-global-ignore");
+    writeFileSync(globalIgnorePath, "global-ignored/\n");
+    execFileSync("git", ["config", "core.excludesFile", globalIgnorePath], {
+      cwd,
+      stdio: "ignore",
+    });
+    mkdirSync(join(cwd, "info-ignored"), { recursive: true });
+    mkdirSync(join(cwd, "global-ignored"), { recursive: true });
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(join(cwd, "info-ignored", "info.ts"), "export {};\n");
+    writeFileSync(join(cwd, "global-ignored", "global.ts"), "export {};\n");
+    writeFileSync(join(cwd, "src", "visible.ts"), "export {};\n");
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    for (const [toolCallId, path] of [
+      ["write-info-ignored", "info-ignored/info.ts"],
+      ["write-global-ignored", "global-ignored/global.ts"],
+      ["write-visible", "src/visible.ts"],
+    ] as const) {
+      await emitToolCallWithResult(
+        emit,
+        {
+          type: "tool_call",
+          toolCallId,
+          toolName: "write",
+          input: { path, content: "export {};\n" },
+        } satisfies ToolCallEvent,
+        ctx,
+      );
+    }
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const message = sendUserMessage.mock.calls[0][0] as string;
+    expect(message).toContain("src/visible.ts");
+    expect(message).not.toContain("info-ignored/info.ts");
+    expect(message).not.toContain("global-ignored/global.ts");
+  });
+
+  it("machine-parses VCS paths before applying Git ignore rules", async () => {
+    vi.useFakeTimers();
+
+    const cwd = createConfiguredCwd();
+    initGitRepo(cwd);
+    const ignoredPath = "generated-\ttracked.ts";
+    writeFileSync(join(cwd, ".gitignore"), `${ignoredPath}\n`);
+    writeFileSync(join(cwd, ignoredPath), "export const tracked = 1;\n");
+    commitGitPaths(cwd, [".gitignore", ignoredPath]);
+    writeFileSync(join(cwd, ignoredPath), "export const tracked = 2;\n");
+    const ctx = createContext(cwd);
+    const { emit, sendUserMessage } = createExtensionHarness();
+
+    await emit(
+      "agent_end",
+      { type: "agent_end", messages: [] } satisfies AgentEndEvent,
+      ctx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
   });
 
   it("includes jj-discovered changed files without edit/write tool calls", async () => {

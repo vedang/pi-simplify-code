@@ -19,9 +19,23 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, extname, join } from "node:path";
+import {
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -348,19 +362,33 @@ function promoteSuccessfulToolResult(
   }
 }
 
+function isOutsideDirectory(path: string): boolean {
+  return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path);
+}
+
+function resolvePathFromCwd(cwd: string, path: string): string {
+  if (!isAbsolute(path)) {
+    return resolve(realpathSync(cwd), path);
+  }
+
+  const cwdRelativePath = relative(cwd, path);
+  return isOutsideDirectory(cwdRelativePath)
+    ? path
+    : resolve(realpathSync(cwd), cwdRelativePath);
+}
+
 function normalizeChangedPath(path: string, cwd: string): string | null {
-  let normalized = trimQuotes(path).replace(/\\/g, "/");
+  const normalized = trimQuotes(path).replace(/\\/g, "/");
   if (!normalized) {
     return null;
   }
 
-  const normalizedCwd = trimQuotes(cwd).replace(/\\/g, "/").replace(/\/+$/, "");
-  if (normalizedCwd && normalized.startsWith(`${normalizedCwd}/`)) {
-    normalized = normalized.slice(normalizedCwd.length + 1);
+  const cwdRelativePath = relative(cwd, resolve(cwd, normalized));
+  if (cwdRelativePath && !isOutsideDirectory(cwdRelativePath)) {
+    return cwdRelativePath.split(sep).join("/");
   }
 
-  normalized = normalized.replace(/^(?:\.\/)+/, "");
-  return normalized.length > 0 ? normalized : null;
+  return normalized;
 }
 
 function normalizeChangedPaths(
@@ -379,18 +407,140 @@ function normalizeChangedPaths(
   return normalizedPaths;
 }
 
-function mergeChangedPaths(
+type GitWorktree = string | null | undefined;
+
+function discoverGitWorktree(cwd: string): GitWorktree {
+  try {
+    const worktree = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    return worktree || undefined;
+  } catch (error) {
+    const stderr =
+      typeof error === "object" && error !== null && "stderr" in error
+        ? String(error.stderr)
+        : "";
+    return stderr.includes("not a git repository") ? null : undefined;
+  }
+}
+
+function getWorktreeRelativePath(
   cwd: string,
-  ...pathGroups: Iterable<string>[]
-): Set<string> {
-  return normalizeChangedPaths(
-    cwd,
-    pathGroups.flatMap((paths) => Array.from(paths)),
+  worktree: string,
+  path: string,
+): string | null {
+  const worktreeRelativePath = relative(
+    worktree,
+    resolvePathFromCwd(cwd, path),
   );
+  if (!worktreeRelativePath || isOutsideDirectory(worktreeRelativePath)) {
+    return null;
+  }
+
+  return worktreeRelativePath.split(sep).join("/");
+}
+
+function commandExitStatus(error: unknown): number | undefined {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof error.status === "number"
+  ) {
+    return error.status;
+  }
+
+  return undefined;
+}
+
+// [tag:simplify_exclude_gitignored_paths] Discover worktree roots with Git,
+// then query only in-worktree paths. Keep outside tool paths; fail closed for
+// in-worktree paths when Git cannot complete an ignore query.
+function excludeGitIgnoredPaths(
+  cwd: string,
+  paths: Set<string>,
+  worktree: GitWorktree,
+): Set<string> {
+  if (paths.size === 0 || worktree === null) {
+    return paths;
+  }
+
+  if (worktree === undefined) {
+    return new Set();
+  }
+
+  const outsideWorktreePaths = new Set<string>();
+  const worktreePaths = new Map<string, string>();
+
+  for (const path of paths) {
+    const worktreePath = getWorktreeRelativePath(cwd, worktree, path);
+    if (worktreePath === null) {
+      outsideWorktreePaths.add(path);
+    } else {
+      worktreePaths.set(path, worktreePath);
+    }
+  }
+
+  if (worktreePaths.size === 0) {
+    return outsideWorktreePaths;
+  }
+
+  try {
+    const ignoredPaths = new Set(
+      execFileSync("git", ["check-ignore", "--no-index", "--stdin", "-z"], {
+        cwd: worktree,
+        encoding: "utf8",
+        input: `${Array.from(worktreePaths.values()).join("\0")}\0`,
+        stdio: ["pipe", "pipe", "ignore"],
+      })
+        .split("\0")
+        .filter(Boolean),
+    );
+
+    for (const [path, worktreePath] of worktreePaths) {
+      if (!ignoredPaths.has(worktreePath)) {
+        outsideWorktreePaths.add(path);
+      }
+    }
+  } catch (error) {
+    if (commandExitStatus(error) === 1) {
+      for (const path of worktreePaths.keys()) {
+        outsideWorktreePaths.add(path);
+      }
+    }
+  }
+
+  return outsideWorktreePaths;
 }
 
 function parseNameOnlyOutput(output: string, cwd: string): string[] {
   return Array.from(normalizeChangedPaths(cwd, output.split(/\r?\n/)));
+}
+
+function parseGitNameOnlyOutput(
+  output: string,
+  cwd: string,
+  worktree: string,
+): string[] {
+  const paths = new Set<string>();
+
+  for (const path of output.split("\0")) {
+    if (!path) {
+      continue;
+    }
+
+    const cwdRelativePath = relative(
+      realpathSync(cwd),
+      resolve(worktree, path),
+    );
+    if (cwdRelativePath) {
+      paths.add(cwdRelativePath.split(sep).join("/"));
+    }
+  }
+
+  return Array.from(paths);
 }
 
 function runVcsNameOnlyCommand(
@@ -412,7 +562,30 @@ function runVcsNameOnlyCommand(
   }
 }
 
-function collectVcsChangedPaths(cwd: string): Set<string> {
+function runGitNameOnlyCommand(
+  cwd: string,
+  worktree: string,
+  args: string[],
+): string[] {
+  try {
+    return parseGitNameOnlyOutput(
+      execFileSync("git", args, {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+      cwd,
+      worktree,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function collectVcsChangedPaths(
+  cwd: string,
+  worktree: GitWorktree,
+): Set<string> {
   const paths = new Set<string>();
   const addPaths = (newPaths: Iterable<string>): void => {
     for (const path of newPaths) {
@@ -425,18 +598,26 @@ function collectVcsChangedPaths(cwd: string): Set<string> {
     return paths;
   }
 
-  if (!existsSync(join(cwd, ".git"))) {
+  if (typeof worktree !== "string") {
     return paths;
   }
 
   addPaths(
-    runVcsNameOnlyCommand(cwd, "git", ["diff", "--name-only", "HEAD", "--"]),
+    runGitNameOnlyCommand(cwd, worktree, [
+      "diff",
+      "--name-only",
+      "-z",
+      "HEAD",
+      "--",
+    ]),
   );
   addPaths(
-    runVcsNameOnlyCommand(cwd, "git", [
+    runGitNameOnlyCommand(cwd, worktree, [
       "ls-files",
       "--others",
       "--exclude-standard",
+      "--full-name",
+      "-z",
     ]),
   );
 
@@ -455,7 +636,13 @@ export default function simplifyCodeExtension(pi: ExtensionAPI): void {
   }
 
   function collectSimplifyCandidatePaths(cwd: string): Set<string> {
-    return mergeChangedPaths(cwd, pendingPaths, collectVcsChangedPaths(cwd));
+    const worktree = discoverGitWorktree(cwd);
+    const paths = normalizeChangedPaths(cwd, pendingPaths);
+    for (const path of collectVcsChangedPaths(cwd, worktree)) {
+      paths.add(path);
+    }
+
+    return excludeGitIgnoredPaths(cwd, paths, worktree);
   }
 
   function formatPathsMessage(paths: Set<string>): string {
